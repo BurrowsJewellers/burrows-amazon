@@ -1,0 +1,4 @@
+# burrows-amazon: keep the picture current. None of these send anything to Amazon.
+25 */2 * * * /opt/burrows-amazon/run.sh health   >> /var/log/burrows-amazon-health.log 2>&1
+10 6 * * *   /opt/burrows-amazon/run.sh populate >> /var/log/burrows-amazon-populate.log 2>&1
+40 6 * * *   /opt/burrows-amazon/run.sh audit    >> /var/log/burrows-amazon-audit.log 2>&1

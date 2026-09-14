@@ -90,3 +90,10 @@ create table if not exists amazon_runs (
   skipped     integer not null default 0,
   note        text
 );
+
+-- What Amazon is actually doing with each offer, as opposed to whether we sent it.
+-- Sending succeeds long before a listing is buyable, and Amazon can suppress one
+-- afterwards without telling anyone, so this is read back rather than assumed.
+alter table amazon_listings add column if not exists listing_status text;
+alter table amazon_listings add column if not exists buyable boolean;
+alter table amazon_listings add column if not exists status_checked_at timestamptz;

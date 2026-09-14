@@ -24,7 +24,8 @@ router.get('/listings', async (req, res, next) => {
 
     const { rows } = await db.query(
       `select barcode, sku, vendor, our_title, our_price, qty, source,
-              asin, amazon_title, state, state_reason, confidence, match_note, last_pushed_at
+              asin, amazon_title, state, state_reason, confidence, match_note, last_pushed_at,
+              listing_status, buyable, status_checked_at
        from amazon_listings
        ${where.length ? 'where ' + where.join(' and ') : ''}
        order by vendor, sku
@@ -52,15 +53,31 @@ router.get('/conflicts', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-/** Everything Amazon refused, grouped by cause — six problems, not three hundred rows. */
+/**
+ * Everything Amazon is unhappy about, grouped by cause — six problems, not three
+ * hundred rows. Grouped on the plain-English cause rather than Amazon's code, because
+ * one cause arrives under several codes and some carry no code at all.
+ *
+ * Each group names the products it affects, so the fix is a job someone can pick up
+ * rather than a number they can only look at.
+ */
 router.get('/errors', async (req, res, next) => {
   try {
-    const { rows } = await db.query(
-      `select code, min(plain) as plain, min(fix) as fix, count(*)::int as affected,
-              max(created_at) as last_seen
-       from amazon_errors where resolved_at is null
-       group by code order by count(*) desc`
-    );
+    const { rows } = await db.query(`
+      select e.plain,
+             min(e.fix)                       as fix,
+             count(*)::int                    as affected,
+             max(e.created_at)                as last_seen,
+             json_agg(json_build_object(
+               'sku',   e.sku,
+               'title', l.our_title,
+               'asin',  l.asin
+             ) order by e.sku)                as items
+      from amazon_errors e
+      left join amazon_listings l on l.sku = e.sku
+      where e.resolved_at is null
+      group by e.plain
+      order by count(*) desc`);
     res.json({ groups: rows });
   } catch (err) { next(err); }
 });

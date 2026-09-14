@@ -38,7 +38,19 @@ app.get('/api/summary', async (req, res, next) => {
     const { rows: errors } = await db.query(
       'select count(*)::int as n from amazon_errors where resolved_at is null'
     );
+    // Sent and buyable are different things: Amazon accepts an offer immediately and
+    // decides whether to show it later, so the screen reports both.
+    const { rows: live } = await db.query(
+      `select count(*) filter (where buyable)::int              as buyable,
+              count(*) filter (where listing_status is not null
+                                 and not coalesce(buyable,false))::int as visible_only,
+              max(status_checked_at)                            as checked_at
+       from amazon_listings where state = 'listed'`
+    );
     res.json({
+      buyable: live[0].buyable,
+      visibleNotBuyable: live[0].visible_only,
+      statusCheckedAt: live[0].checked_at,
       listed: by.listed || 0,
       ready: by.ready || 0,
       noMatch: by.no_match || 0,
