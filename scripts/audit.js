@@ -10,49 +10,32 @@
  * This is the backstop the brand ban depends on. Selection and the pre-flight check
  * both look at what we intend to send; only this looks at what Amazon actually has,
  * including anything added by hand or left over from an older tool.
+ *
+ * It enumerates rather than asking about our own SKUs, because the question here is
+ * precisely "what is on Amazon that we have no record of" — which asking about our
+ * records cannot answer.
  */
 const fs = require('fs');
 const db = require('../src/db');
-const config = require('../src/config');
-const { request } = require('../src/amazon/client');
+const { enumerateAll, statusOf, quantityOf } = require('../src/amazon/inventory');
 const { checkBrand } = require('../src/rules/brands');
 
 const OUT = process.argv.find((a) => a.startsWith('--out='))?.split('=')[1] || '/tmp/amazon-strays.txt';
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function fetchLiveListings() {
-  const created = await request('/reports/2021-06-30/reports', {
-    method: 'POST',
-    allowWrite: true, // requests a report; writes nothing to the catalogue
-    body: { reportType: 'GET_MERCHANT_LISTINGS_ALL_DATA', marketplaceIds: [config.amazon.marketplaceId] },
-  });
-
-  let doc = null;
-  for (let i = 0; i < 40; i++) {
-    await sleep(6000);
-    const status = await request(`/reports/2021-06-30/reports/${created.reportId}`);
-    if (['DONE', 'FATAL', 'CANCELLED'].includes(status.processingStatus)) { doc = status.reportDocumentId; break; }
-  }
-  if (!doc) throw new Error('Amazon did not finish the listings report in time');
-
-  const meta = await request(`/reports/2021-06-30/documents/${doc}`);
-  const res = await fetch(meta.url);
-  let text;
-  if (meta.compressionAlgorithm === 'GZIP') {
-    text = require('zlib').gunzipSync(Buffer.from(await res.arrayBuffer())).toString('utf8');
-  } else {
-    text = await res.text();
-  }
-  const lines = text.split('\n').filter((l) => l.trim());
-  if (lines.length < 2) return [];
-  const header = lines[0].split('\t');
-  return lines.slice(1).map((l) => Object.fromEntries(l.split('\t').map((v, i) => [header[i], v])));
-}
 
 async function main() {
+  const run = await db.query(`insert into amazon_runs (job) values ('audit') returning id`);
+  const runId = run.rows[0].id;
+
   console.log('asking Amazon what it currently holds…');
-  const live = await fetchLiveListings();
-  console.log(`Amazon holds ${live.length} listings\n`);
+  const { listings, truncated } = await enumerateAll('summaries,fulfillmentAvailability');
+  console.log(`Amazon holds ${listings.size} listings\n`);
+
+  if (truncated.length) {
+    console.log(`!! ${truncated.length} time windows came back full even at their narrowest,`);
+    console.log('   so this audit may be missing listings. Windows affected:');
+    for (const w of truncated.slice(0, 5)) console.log(`     ${w}`);
+    console.log('');
+  }
 
   const ours = new Map(
     (await db.query('select sku, vendor, state from amazon_listings')).rows.map((r) => [r.sku, r])
@@ -62,28 +45,34 @@ async function main() {
   const strays = [];
   let correct = 0;
 
-  for (const listing of live) {
-    const sku = (listing['seller-sku'] || '').trim();
-    if (!sku) continue;
+  for (const [sku, item] of listings) {
     const mine = ours.get(sku);
+    const qty = quantityOf(item);
+    const onSale = qty === null ? false : qty > 0;
     let why = null;
 
     if (!mine) why = 'not in our records — listed by something other than this system';
     else if (!checkBrand({ vendor: mine.vendor }).allowed) why = `BANNED BRAND (${mine.vendor})`;
     else if (conflicts.has(sku)) why = 'barcode conflict — points at a different product';
-    else if (mine.state !== 'listed') why = `we do not intend to list this (state: ${mine.state})`;
+    else if (mine.state !== 'listed' && mine.state !== 'ready') why = `we do not intend to list this (${mine.state})`;
 
-    if (why) strays.push({ sku, why, title: (listing['item-name'] || '').slice(0, 60) });
-    else correct++;
+    if (why) {
+      strays.push({ sku, why, onSale, status: statusOf(item).join(',') });
+    } else {
+      correct++;
+    }
   }
 
+  // A stray nobody can buy is untidy. A stray with stock against it is selling.
+  const selling = strays.filter((s) => s.onSale);
+
   console.log(`${correct} listings are ours and correct`);
-  console.log(`${strays.length} should not be on Amazon`);
+  console.log(`${strays.length} should not be on Amazon, ${selling.length} of them with stock against them`);
 
   const banned = strays.filter((s) => s.why.startsWith('BANNED BRAND'));
   if (banned.length) {
-    console.log(`\n!! ${banned.length} BANNED-BRAND listings are live on the account !!`);
-    for (const b of banned.slice(0, 15)) console.log(`   ${b.sku}  ${b.title}`);
+    console.log(`\n!! ${banned.length} BANNED-BRAND listings are on the account !!`);
+    for (const b of banned.slice(0, 15)) console.log(`   ${b.sku}  ${b.onSale ? 'ON SALE' : 'no stock'}`);
   }
 
   if (strays.length) {
@@ -96,12 +85,18 @@ async function main() {
     for (const [why, n] of Object.entries(byReason).sort((a, b) => b[1] - a[1])) {
       console.log(`  ${String(n).padStart(5)}  ${why}`);
     }
-    fs.writeFileSync(OUT, strays.map((s) => s.sku).join('\n') + '\n');
-    console.log(`\nSKUs written to ${OUT} — review that list before removing anything.`);
+    // Only the ones actually on sale are worth acting on in a hurry.
+    fs.writeFileSync(OUT, selling.map((s) => s.sku).join(',') + (selling.length ? '\n' : ''));
+    console.log(`\n${selling.length} SKUs with stock written to ${OUT} — review before removing anything.`);
   } else {
     console.log('\nNothing to clean up. Amazon holds only what we intend.');
   }
 
+  await db.query(
+    'update amazon_runs set finished_at = now(), ok = $2, failed = $3, note = $4 where id = $1',
+    [runId, correct, strays.length,
+     JSON.stringify({ held: listings.size, selling: selling.length, banned: banned.length, truncated: truncated.length })]
+  );
   await db.pool.end();
 }
 

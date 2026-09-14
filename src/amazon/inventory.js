@@ -39,6 +39,72 @@ async function fetchBySku(skus, includedData = 'summaries,offers,fulfillmentAvai
   return found;
 }
 
+/** One window's worth of listings, following its pages to the end. */
+async function pageThrough(query) {
+  const out = [];
+  let token = null;
+  for (let page = 0; page < 60; page++) {
+    const res = await request(
+      `/listings/2021-08-01/items/${encodeURIComponent(config.amazon.sellerId)}`,
+      { query: token ? { ...query, pageToken: token } : query }
+    );
+    out.push(...(res.items || []));
+    token = res.pagination?.nextToken || null;
+    if (!token) break;
+  }
+  return out;
+}
+
+/** Amazon stops at this many results per query and says nothing about it. */
+const RESULT_CAP = 1000;
+
+/**
+ * Every listing on the account, including ones we have no record of.
+ *
+ * Needed only where the question is "what is on Amazon that should not be" — the brand
+ * ban's backstop. Asking by SKU cannot answer that, because the whole point is to find
+ * SKUs we do not know about.
+ *
+ * The search caps at 1,000 results with no indication it has done so, so instead of
+ * asking for the account we ask for slices of time and split any slice that comes back
+ * at the cap. A window that returns fewer than the cap is complete by definition.
+ */
+async function enumerateAll(includedData = 'summaries', onProgress) {
+  const found = new Map();
+  const base = { marketplaceIds: config.amazon.marketplaceId, includedData, pageSize: 20 };
+  const truncated = [];
+
+  async function scan(after, before, depth) {
+    const query = { ...base, lastUpdatedAfter: after.toISOString() };
+    if (before) query.lastUpdatedBefore = before.toISOString();
+
+    const items = await pageThrough(query);
+
+    // Under the cap means we have the whole window. At the cap it is almost certainly
+    // cut short, so halve it and ask again.
+    if (items.length >= RESULT_CAP && before && depth < 24) {
+      const mid = new Date((after.getTime() + before.getTime()) / 2);
+      if (mid > after && mid < before) {
+        await scan(after, mid, depth + 1);
+        await scan(mid, before, depth + 1);
+        return;
+      }
+      // The window is already as narrow as it can get and still full: record that we
+      // know this slice is incomplete rather than pretending otherwise.
+      truncated.push(`${after.toISOString()}..${before.toISOString()}`);
+    }
+
+    for (const item of items) found.set(item.sku, item);
+    if (onProgress) onProgress(found.size);
+  }
+
+  // The account cannot hold anything older than this, and an open-ended upper bound
+  // would leave the newest window unsplittable.
+  await scan(new Date('2010-01-01T00:00:00Z'), new Date(Date.now() + 86400000), 0);
+
+  return { listings: found, truncated };
+}
+
 /**
  * The quantity Amazon actually holds, by SKU.
  *
@@ -59,4 +125,4 @@ function statusOf(item) {
   return Array.isArray(s.status) ? s.status : [s.status].filter(Boolean);
 }
 
-module.exports = { fetchBySku, quantityOf, statusOf };
+module.exports = { fetchBySku, enumerateAll, quantityOf, statusOf };
