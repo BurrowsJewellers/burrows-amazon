@@ -16,48 +16,12 @@
  */
 const db = require('../src/db');
 const config = require('../src/config');
-const { request } = require('../src/amazon/client');
 const { setQuantity, readResult } = require('../src/amazon/listings');
+const { fetchBySku, quantityOf } = require('../src/amazon/inventory');
 const { checkBrand } = require('../src/rules/brands');
 
 const DRY = process.argv.includes('--dry-run');
 const LIMIT = Number(process.argv.find((a) => a.startsWith('--limit='))?.split('=')[1] || 0);
-
-/**
- * What Amazon actually holds, by SKU — not what we believe we sent.
- *
- * Comparing our own record against the store would miss the case that matters most:
- * Amazon quietly dropping a quantity to zero on its own. Thirteen listings were sitting
- * closed that way while we held stock, and nothing would have noticed, because our
- * record and the store agreed with each other and neither had been asked.
- *
- * Returns null for a SKU Amazon has not finished setting up, which is not the same as
- * zero and must not be corrected as though it were.
- */
-async function quantitiesOnAmazon() {
-  const held = new Map();
-  let token = null;
-  for (let page = 0; page < 500; page++) {
-    const query = {
-      marketplaceIds: config.amazon.marketplaceId,
-      includedData: 'fulfillmentAvailability',
-      pageSize: 20,
-    };
-    if (token) query.pageToken = token;
-    const res = await request(
-      `/listings/2021-08-01/items/${encodeURIComponent(config.amazon.sellerId)}`, { query });
-    for (const item of res.items || []) {
-      const fa = item.fulfillmentAvailability || [];
-      // An entry can exist with no quantity on it. That is "not set yet", the same as
-      // having no entry — and emphatically not zero, which would read as sold out.
-      const qty = fa.length ? Number(fa[0].quantity) : null;
-      held.set(item.sku, Number.isFinite(qty) ? qty : null);
-    }
-    token = res.pagination?.nextToken || null;
-    if (!token) break;
-  }
-  return held;
-}
 
 async function main() {
   if (!DRY && !config.channelEnabled) {
@@ -81,16 +45,21 @@ async function main() {
     order by a.sku
   `);
 
-  const onAmazon = await quantitiesOnAmazon();
+  // Ask about our own SKUs rather than enumerating the account: the listings search
+  // stops at 1,000 and gives no sign it has, so anything past that would silently stop
+  // being watched — and the single pieces this protects are the tail of the catalogue.
+  const onAmazon = await fetchBySku(rows.map((r) => r.sku), 'fulfillmentAvailability');
 
   // Compare the store against Amazon itself. A SKU Amazon has not finished setting up
   // reports null rather than zero, and is left alone — re-sending a quantity it has not
   // processed yet only adds to the queue it is already working through.
   const needsChange = [];
   let settling = 0;
+  let notOnAmazon = 0;
   for (const row of rows) {
-    const amazonQty = onAmazon.has(row.sku) ? onAmazon.get(row.sku) : undefined;
-    if (amazonQty === undefined) continue;       // not on Amazon at all
+    const item = onAmazon.get(row.sku);
+    if (!item) { notOnAmazon++; continue; }
+    const amazonQty = quantityOf(item);
     if (amazonQty === null) { settling++; continue; }
     const want = Math.max(0, row.live_qty);
     if (amazonQty !== want) needsChange.push({ ...row, amazon_qty: amazonQty, want });
@@ -102,10 +71,11 @@ async function main() {
   const restock = needsChange.filter((r) => r.want > 0);
   const queue = [...soldOut, ...restock].slice(0, LIMIT || undefined);
 
-  console.log(`${DRY ? '[dry run] ' : ''}${onAmazon.size} listings on Amazon, ${rows.length} in our records`);
+  console.log(`${DRY ? '[dry run] ' : ''}${rows.length} sent, ${onAmazon.size} found on Amazon`);
   console.log(`  ${soldOut.length} have sold out and Amazon still shows them available`);
   console.log(`  ${restock.length} have a quantity on Amazon that is not what we hold`);
   console.log(`  ${settling} are still being set up by Amazon and were left alone`);
+  if (notOnAmazon) console.log(`  ${notOnAmazon} are not on Amazon at all`);
   if (!queue.length) {
     console.log('\nNothing to change. Amazon matches what we hold.');
     await db.query(`update amazon_runs set finished_at = now() where id = $1`, [runId]);

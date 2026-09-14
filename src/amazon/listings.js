@@ -64,6 +64,9 @@ async function setQuantity({ sku, quantity }) {
  * Amazon's own message rather than being flattened into "unknown error".
  */
 const TRANSLATIONS = [
+  [/may not create new ASINs|connect your brand .* with your account|create new ASINs with this brand/i,
+   'The Amazon listing we matched no longer exists, so Amazon treated this as a new product',
+   'Nothing to do in Seller Central — this is not really a brand problem. The ASIN we matched by barcode has been withdrawn from the Australian catalogue, so Amazon fell back to creating a new product page and blocked that because we do not own the brand. The product cannot be listed until Amazon carries it again under this barcode.'],
   [/not (?:authorized|approved).*brand|brand.*not.*approved|approval to list in this brand/i,
    'Not approved to sell this brand on Amazon',
    'Amazon gates some brands per seller. Apply in Seller Central under Inventory → Add a Product → Listing Limitations Apply, attaching an invoice from the supplier. Once approved, re-send with: node scripts/push.js --only=<SKU>'],

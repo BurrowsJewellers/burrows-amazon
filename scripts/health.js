@@ -12,56 +12,46 @@
  * Read-only against Amazon. Writes only to our own amazon_errors table.
  */
 const db = require('../src/db');
-const config = require('../src/config');
-const { request } = require('../src/amazon/client');
 const { explain } = require('../src/amazon/listings');
+const { fetchBySku } = require('../src/amazon/inventory');
 
-const SELLER = config.amazon.sellerId;
-
-/** Every listing on the account, straight from the Listings API. */
+/**
+ * Every listing we have sent, asked about by SKU.
+ *
+ * Not an enumeration of the account: Amazon's listings search stops at 1,000 results
+ * and then simply stops offering a next page, with nothing to distinguish that from
+ * having reached the end. Everything past the thousandth listing was invisible here,
+ * which made every count this job reported an undercount.
+ */
 async function liveListings() {
-  const out = [];
-  let token = null;
-  for (let page = 0; page < 500; page++) {
-    const query = {
-      marketplaceIds: config.amazon.marketplaceId,
-      includedData: 'summaries,issues,offers,attributes',
-      pageSize: 20,
-      issueLocale: 'en_AU',
-    };
-    if (token) query.pageToken = token;
+  const { rows } = await db.query(
+    'select sku from amazon_listings where last_pushed_at is not null order by sku');
+  const found = await fetchBySku(rows.map((r) => r.sku), 'summaries,issues,offers,attributes');
 
-    const res = await request(`/listings/2021-08-01/items/${encodeURIComponent(SELLER)}`, { query });
-    for (const item of res.items || []) {
-      const s = (item.summaries || [])[0] || {};
-      const status = Array.isArray(s.status) ? s.status : (s.status ? [s.status] : []);
-      out.push({
-        sku: item.sku,
-        asin: s.asin || null,
-        status,
-        buyable: status.includes('BUYABLE'),
-        issues: item.issues || [],
-        price: (item.offers || [])[0]?.price?.amount ?? null,
-        // Amazon takes a while to register a brand-new SKU's price and stock. Until it
-        // has, there is no offer to buy — which is the usual reason a listing is
-        // visible but not buyable, and nothing to worry about on the day it is sent.
-        hasOffer: (item.offers || []).length > 0,
-        // The price we submitted, against the price Amazon is actually charging. These
-        // disagree for a while after a push, and on a SKU that was listed before, the
-        // price Amazon keeps showing in the meantime is the OLD one.
-        submittedPrice: Number(
-          item.attributes?.purchasable_offer?.[0]?.our_price?.[0]?.schedule?.[0]?.value_with_tax
-        ) || null,
-        shownPrice: Number((item.offers || [])[0]?.price?.amount) || null,
-      });
-    }
-    token = res.pagination?.nextToken || null;
-    if (!token) break;
+  const out = [];
+  for (const [, item] of found) {
+    const s = (item.summaries || [])[0] || {};
+    const status = Array.isArray(s.status) ? s.status : (s.status ? [s.status] : []);
+    out.push({
+      sku: item.sku,
+      asin: s.asin || null,
+      status,
+      buyable: status.includes('BUYABLE'),
+      issues: item.issues || [],
+      // Amazon takes a while to register a brand-new SKU's price and stock. Until it
+      // has, there is no offer to buy — which is the usual reason a listing is visible
+      // but not buyable, and nothing to worry about on the day it is sent.
+      hasOffer: (item.offers || []).length > 0,
+      // The price we submitted, against the price Amazon is actually charging. These
+      // disagree for a while after a push, and on a SKU that was listed before, the
+      // price Amazon keeps showing in the meantime is the OLD one.
+      submittedPrice: Number(
+        item.attributes?.purchasable_offer?.[0]?.our_price?.[0]?.schedule?.[0]?.value_with_tax
+      ) || null,
+      shownPrice: Number((item.offers || [])[0]?.price?.amount) || null,
+    });
   }
-  // Amazon's paging can hand back the same SKU on two pages. Left alone that
-  // double-counts everything downstream, including the number of listings said to be
-  // selling at the wrong price.
-  return [...new Map(out.map((l) => [l.sku, l])).values()];
+  return out;
 }
 
 async function main() {

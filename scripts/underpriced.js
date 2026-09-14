@@ -13,39 +13,22 @@
  * so correcting it is a separate, deliberate step.
  */
 const fs = require('fs');
-const config = require('../src/config');
-const { request } = require('../src/amazon/client');
+const db = require('../src/db');
+const { fetchBySku, statusOf } = require('../src/amazon/inventory');
 
 const OUT = process.argv.find((a) => a.startsWith('--out='))?.split('=')[1] || '/tmp/underpriced.txt';
 const QUIET = process.argv.includes('--quiet');
 
-async function everyListing() {
-  const seen = new Map();
-  let token = null;
-  for (let page = 0; page < 500; page++) {
-    const query = {
-      marketplaceIds: config.amazon.marketplaceId,
-      includedData: 'summaries,offers,attributes',
-      pageSize: 20,
-    };
-    if (token) query.pageToken = token;
-    const res = await request(
-      `/listings/2021-08-01/items/${encodeURIComponent(config.amazon.sellerId)}`, { query });
-    // Keyed by SKU: Amazon's paging can repeat one across two pages.
-    for (const item of res.items || []) seen.set(item.sku, item);
-    token = res.pagination?.nextToken || null;
-    if (!token) break;
-  }
-  return seen;
-}
-
 async function main() {
-  const listings = await everyListing();
+  // Our own SKUs, not an enumeration of the account: the listings search stops at
+  // 1,000 without saying so, and a listing selling below our price is exactly the
+  // thing that must not fall off the end of a truncated list.
+  const { rows } = await db.query("select sku from amazon_listings where last_pushed_at is not null");
+  const listings = await fetchBySku(rows.map((r) => r.sku), 'summaries,offers,attributes');
   const under = [];
 
   for (const [sku, item] of listings) {
-    const summary = (item.summaries || [])[0] || {};
-    const status = Array.isArray(summary.status) ? summary.status : [summary.status].filter(Boolean);
+    const status = statusOf(item);
     const sent = Number(item.attributes?.purchasable_offer?.[0]?.our_price?.[0]?.schedule?.[0]?.value_with_tax) || null;
     const shown = Number((item.offers || [])[0]?.price?.amount) || null;
     // Only a buyable listing is a problem. A price that disagrees on something nobody
@@ -60,10 +43,11 @@ async function main() {
 
   if (QUIET) {
     console.log(`${under.length} buyable below our price`);
+    await db.pool.end();
     return;
   }
 
-  console.log(`${listings.size} distinct listings on Amazon`);
+  console.log(`${listings.size} listings checked`);
   console.log(`${under.length} buyable below the price we set\n`);
   for (const u of under) {
     console.log(`  ${u.sku.padEnd(14)} showing $${String(u.shown).padStart(8)}  should be $${String(u.sent).padStart(8)}   $${u.under.toFixed(2)} under`);
@@ -74,6 +58,7 @@ async function main() {
   } else {
     console.log('Everything buyable is at the price we set.');
   }
+  await db.pool.end();
 }
 
 main().catch((err) => { console.error(err); process.exit(1); });

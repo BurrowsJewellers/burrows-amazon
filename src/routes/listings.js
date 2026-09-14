@@ -11,24 +11,29 @@ router.get('/listings', async (req, res, next) => {
     const where = [];
     const params = [];
 
-    if (state) { params.push(state); where.push(`state = $${params.length}`); }
-    if (vendor) { params.push(vendor); where.push(`vendor = $${params.length}`); }
-    if (source) { params.push(source); where.push(`source = $${params.length}`); }
+    if (state) { params.push(state); where.push(`a.state = $${params.length}`); }
+    if (vendor) { params.push(vendor); where.push(`a.vendor = $${params.length}`); }
+    if (source) { params.push(source); where.push(`a.source = $${params.length}`); }
     if (q) {
       params.push(`%${q}%`);
-      where.push(`(sku ilike $${params.length} or barcode ilike $${params.length} or our_title ilike $${params.length})`);
+      where.push(`(a.sku ilike $${params.length} or a.barcode ilike $${params.length} or a.our_title ilike $${params.length})`);
     }
 
     params.push(Math.min(Number(limit) || 100, 500));
     params.push(Number(offset) || 0);
 
     const { rows } = await db.query(
-      `select barcode, sku, vendor, our_title, our_price, qty, source,
-              asin, amazon_title, state, state_reason, confidence, match_note, last_pushed_at,
-              listing_status, buyable, status_checked_at
-       from amazon_listings
+      `select a.barcode, a.sku, a.vendor, a.our_title, a.our_price, a.qty, a.source,
+              a.asin, a.amazon_title, a.state, a.state_reason, a.confidence, a.match_note,
+              a.last_pushed_at, a.listing_status, a.buyable, a.status_checked_at,
+              -- an open complaint from Amazon, so the screen can say "stuck" rather
+              -- than "not buyable yet", which wrongly implies it is still coming
+              (select e.plain from amazon_errors e
+                where e.sku = a.sku and e.resolved_at is null
+                order by e.created_at desc limit 1) as problem
+       from amazon_listings a
        ${where.length ? 'where ' + where.join(' and ') : ''}
-       order by vendor, sku
+       order by a.vendor, a.sku
        limit $${params.length - 1} offset $${params.length}`,
       params
     );

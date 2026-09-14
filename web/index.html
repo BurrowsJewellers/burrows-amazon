@@ -288,6 +288,9 @@ async function renderConflicts() {
 /** What Amazon is doing with an offer, which is not the same as whether we sent it. */
 function liveState(r) {
   if (r.buyable) return '<span class="pill listed">people can buy it</span>';
+  // A listing Amazon has complained about is not on its way — say so, rather than
+  // "not buyable yet", which reads as though waiting will fix it.
+  if (r.problem) return `<span class="pill conflict">stuck</span><div class="muted" style="font-size:.82rem;margin-top:3px">${esc(r.problem)}</div>`;
   if (r.listing_status) return '<span class="pill review">visible, not buyable yet</span>';
   if (r.status_checked_at) return '<span class="muted">Amazon has not settled it yet</span>';
   return '<span class="muted">not checked yet</span>';
