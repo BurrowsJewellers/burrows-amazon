@@ -137,9 +137,11 @@ const fixFor = (reason) => {
 };
 
 let summary = {};
-let current = 'ready';
+let current = 'listed';
 
 const TABS = [
+  {key:'listed',    label:'Live on Amazon'},
+  {key:'problems',  label:'Amazon is unhappy'},
   {key:'ready',     label:'Ready to list'},
   {key:'review',    label:'Needs a look'},
   {key:'held',      label:'On hold'},
@@ -150,17 +152,24 @@ const TABS = [
 
 async function load() {
   summary = await api('/summary');
+  const checked = summary.statusCheckedAt
+    ? new Date(summary.statusCheckedAt).toLocaleString('en-AU', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' })
+    : 'not yet';
   $('sub').textContent =
-    `${(summary.ready || 0).toLocaleString()} products ready to list · ${(summary.conflicts || 0).toLocaleString()} barcode conflicts blocked · reading live from Amazon's Australian catalogue`;
+    `${(summary.listed || 0).toLocaleString()} listings sent to Amazon · ` +
+    `${(summary.ready || 0).toLocaleString()} more ready to go · ` +
+    `${(summary.conflicts || 0).toLocaleString()} barcode conflicts blocked · ` +
+    `status last read back from Amazon ${checked}`;
 
   $('writeBanner').innerHTML = summary.writesEnabled
     ? '<div class="banner info"><b>Writes are enabled.</b> Offers can be sent to Amazon.</div>'
     : '<div class="banner info"><b>Nothing is being sent to Amazon yet.</b> The channel is switched off, so everything here is analysis only — matching and reporting run, no offers are created.</div>';
 
   $('tiles').innerHTML = [
+    ['good', summary.buyable, 'people can buy'],
+    ['warn', summary.visibleNotBuyable, 'sent, not buyable yet'],
+    ['bad',  summary.openErrors, 'Amazon is unhappy'],
     ['good', summary.ready, 'ready to list'],
-    ['',     summary.listed, 'live on Amazon'],
-    ['warn', summary.review, 'need a look'],
     ['warn', summary.held, 'on hold'],
     ['bad',  summary.conflicts, 'barcode conflicts'],
     ['',     summary.noMatch, 'not on Amazon'],
@@ -174,6 +183,7 @@ async function load() {
             : t.key === 'no_match' ? summary.noMatch
             : t.key === 'blocked' ? summary.blocked
             : t.key === 'held' ? summary.held
+            : t.key === 'problems' ? summary.openErrors
             : summary[t.key];
     return `<button role="tab" aria-selected="${t.key===current}" data-tab="${t.key}">${t.label}<span class="count">${(n||0).toLocaleString()}</span></button>`;
   }).join('');
@@ -193,6 +203,7 @@ async function render() {
   $('panel').innerHTML = '<div class="loading">Loading…</div>';
   if (current === 'conflicts') return renderConflicts();
   if (current === 'blocked')   return renderBlocked();
+  if (current === 'problems')  return renderProblems();
   return renderList(current);
 }
 
@@ -209,10 +220,19 @@ async function renderList(state) {
     return;
   }
 
-  const showWhy = state !== 'ready';
-  $('panel').innerHTML = search + '<div class="tablewrap"><table><thead><tr>' +
+  const showWhy = state !== 'ready' && state !== 'listed';
+  const showMatch = state === 'ready' || state === 'listed';
+  const note = state === 'listed'
+    ? `<div class="banner info" style="margin:0 0 14px">Amazon accepts an offer straight away but decides
+        separately whether people can buy it, so a listing sits at <b>sent</b> for a while before it turns
+        <b>buyable</b>. Newly sent offers usually settle within a few hours. Anything Amazon actually objects
+        to appears under <b>Amazon is unhappy</b>.</div>`
+    : '';
+
+  $('panel').innerHTML = search + note + '<div class="tablewrap"><table><thead><tr>' +
     '<th>SKU</th><th>Barcode</th><th>Product</th><th>Brand</th><th class="num">Price</th><th class="num">Stock</th>' +
-    (state === 'ready' ? '<th>Matched to</th>' : '') +
+    (showMatch ? '<th>Matched to</th>' : '') +
+    (state === 'listed' ? '<th>On Amazon</th>' : '') +
     (showWhy ? '<th>Why it isn’t listed</th><th>How to fix it</th>' : '') +
     '</tr></thead><tbody>' +
     rows.map(r => `<tr>
@@ -222,7 +242,8 @@ async function renderList(state) {
       <td>${esc(r.vendor)}</td>
       <td class="num">${money(r.our_price)}</td>
       <td class="num">${r.qty}</td>
-      ${state === 'ready' ? `<td><code>${esc(r.asin||'')}</code><div class="muted" style="font-size:.83rem">${esc((r.amazon_title||'').slice(0,42))}</div></td>` : ''}
+      ${showMatch ? `<td><code>${esc(r.asin||'')}</code><div class="muted" style="font-size:.83rem">${esc((r.amazon_title||'').slice(0,42))}</div></td>` : ''}
+      ${state === 'listed' ? `<td>${liveState(r)}</td>` : ''}
       ${showWhy ? `<td>${esc(r.state_reason || r.match_note || '')}</td><td class="fix">${esc(fixFor(r.state_reason || r.match_note))}</td>` : ''}
     </tr>`).join('') +
     '</tbody></table></div>';
@@ -261,6 +282,43 @@ async function renderConflicts() {
           <div class="muted" style="font-size:.85rem">${esc(r.amazon_brand || 'no brand listed')} · <code>${esc(r.asin)}</code></div>
         </div>
         <div class="conflict-why">${esc(r.reason)}</div>
+      </div>`).join('');
+}
+
+/** What Amazon is doing with an offer, which is not the same as whether we sent it. */
+function liveState(r) {
+  if (r.buyable) return '<span class="pill listed">people can buy it</span>';
+  if (r.listing_status) return '<span class="pill review">visible, not buyable yet</span>';
+  if (r.status_checked_at) return '<span class="muted">Amazon has not settled it yet</span>';
+  return '<span class="muted">not checked yet</span>';
+}
+
+async function renderProblems() {
+  const res = await api('/errors');
+  const groups = res.groups || [];
+  if (!groups.length) {
+    $('panel').innerHTML = '<div class="empty">Amazon is not objecting to anything. Every listing we have sent is accepted.</div>';
+    return;
+  }
+  $('panel').innerHTML =
+    `<div class="banner info" style="margin:0 0 14px">These are Amazon's own objections, read back from the
+      listings rather than guessed at. Each one names the products it affects, so it can be worked through
+      a group at a time.</div>` +
+    groups.map(g => `
+      <div class="card" style="padding:14px 16px;margin-bottom:12px">
+        <div style="display:flex;gap:12px;align-items:baseline;flex-wrap:wrap">
+          <b style="font-size:1rem">${esc(g.plain)}</b>
+          <span class="pill blocked">${Number(g.affected).toLocaleString()} ${Number(g.affected) === 1 ? 'product' : 'products'}</span>
+        </div>
+        <div class="fix" style="margin:8px 0 10px">${esc(g.fix || '')}</div>
+        <div class="tablewrap"><table><thead><tr><th>SKU</th><th>Product</th><th>ASIN</th></tr></thead><tbody>
+          ${(g.items || []).slice(0, 40).map(i => `<tr>
+            <td><code>${esc(i.sku || '')}</code></td>
+            <td>${esc((i.title || '').slice(0, 60))}</td>
+            <td><code>${esc(i.asin || '')}</code></td>
+          </tr>`).join('')}
+        </tbody></table></div>
+        ${(g.items || []).length > 40 ? `<div class="muted" style="margin-top:8px;font-size:.85rem">…and ${(g.items.length - 40).toLocaleString()} more</div>` : ''}
       </div>`).join('');
 }
 
