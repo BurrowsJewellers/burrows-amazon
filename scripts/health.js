@@ -141,6 +141,35 @@ async function main() {
   );
   const sellingAtWrongPrice = mispriced.filter((l) => l.buyable && l.shownPrice < l.submittedPrice);
 
+  // Recorded, not just printed. This runs from cron, and a discount nobody authorised
+  // is exactly the thing that must not be sitting in a log file waiting to be noticed.
+  for (const l of sellingAtWrongPrice) {
+    const short = `Selling at $${l.shownPrice} when it should be $${l.submittedPrice}`;
+    const existing = await db.query(
+      `select id from amazon_errors
+        where sku = $1 and operation = 'price_check' and resolved_at is null limit 1`,
+      [l.sku]
+    );
+    if (!existing.rows.length) {
+      await db.query(
+        `insert into amazon_errors (sku, operation, code, message, plain, fix)
+         values ($1, 'price_check', 'UNDERPRICED', $2, $3, $4)`,
+        [l.sku, short,
+         'On sale for less than the retail price we set',
+         'Amazon is still charging the price these had under the old system, which was ' +
+         'usually a shop sale price. It normally corrects itself within a few hours of the ' +
+         'offer being sent. If it has not, re-send them with scripts/underpriced.js, which ' +
+         'writes the current list ready for push.js --only=']
+      );
+    }
+  }
+  const pricesFixed = await db.query(
+    `update amazon_errors set resolved_at = now()
+      where operation = 'price_check' and resolved_at is null and not (sku = any($1))
+      returning id`,
+    [sellingAtWrongPrice.map((l) => l.sku)]
+  );
+
   if (mispriced.length) {
     console.log(`\n${mispriced.length} listings show a different price than we sent`);
     if (sellingAtWrongPrice.length) {
@@ -154,6 +183,9 @@ async function main() {
     } else {
       console.log('  none of them are buyable yet, so nobody can buy at the old price.');
     }
+  }
+  if (pricesFixed.rowCount) {
+    console.log(`  ${pricesFixed.rowCount} previously underpriced listings are now at the right price`);
   }
 
   // A new SKU with no offer yet is normal for a few hours. A day later it is not: it
