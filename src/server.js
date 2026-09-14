@@ -6,6 +6,9 @@ const db = require('./db');
 const app = express();
 app.use(express.json());
 
+const { requireAuth } = require('./middleware/auth');
+
+// Health is deliberately open: it proves the service is up without revealing data.
 app.get('/api/health', async (req, res) => {
   try {
     await db.query('select 1');
@@ -20,6 +23,9 @@ app.get('/api/health', async (req, res) => {
     res.status(503).json({ ok: false, error: err.message });
   }
 });
+
+// Everything past this point needs the dashboard's login.
+app.use('/api', requireAuth);
 
 /** The counts the overview screen leads with. */
 app.get('/api/summary', async (req, res, next) => {

@@ -85,6 +85,26 @@
 
 <script>
 const API = location.pathname.replace(/\/$/, '') + '/api';
+
+// The same session as the rest of the dashboard. It stores its JWT here, and this
+// page is on the same origin, so signing in there signs you in here. No second login.
+const TOKEN_KEY = 'burrows_dashboard_token';
+const token = localStorage.getItem(TOKEN_KEY);
+if (!token) {
+  location.href = '/?next=' + encodeURIComponent(location.pathname);
+}
+
+/** Every call carries the token; an expired session sends you back to sign in. */
+async function api(path) {
+  const res = await fetch(API + path, { headers: { Authorization: 'Bearer ' + token } });
+  if (res.status === 401) {
+    localStorage.removeItem(TOKEN_KEY);
+    location.href = '/?next=' + encodeURIComponent(location.pathname);
+    throw new Error('Signed out');
+  }
+  if (!res.ok) throw new Error('Request failed (' + res.status + ')');
+  return res.json();
+}
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const money = (v) => v == null ? '' : '$' + Number(v).toLocaleString('en-AU', {minimumFractionDigits:2, maximumFractionDigits:2});
@@ -126,7 +146,7 @@ const TABS = [
 ];
 
 async function load() {
-  summary = await (await fetch(API + '/summary')).json();
+  summary = await api('/summary');
   $('sub').textContent =
     `${(summary.ready || 0).toLocaleString()} products ready to list · ${(summary.conflicts || 0).toLocaleString()} barcode conflicts blocked · reading live from Amazon's Australian catalogue`;
 
@@ -173,7 +193,7 @@ async function render() {
 
 async function renderList(state) {
   const q = $('q') ? $('q').value : '';
-  const res = await (await fetch(`${API}/listings?state=${state}&limit=300&q=${encodeURIComponent(q)}`)).json();
+  const res = await api(`/listings?state=${state}&limit=300&q=${encodeURIComponent(q)}`);
   const rows = res.rows || [];
 
   const search = `<div class="toolbar"><input type="search" id="q" placeholder="Search SKU, barcode or title…" value="${esc(q)}"></div>`;
@@ -212,7 +232,7 @@ function wireSearch() {
 }
 
 async function renderConflicts() {
-  const res = await (await fetch(API + '/conflicts')).json();
+  const res = await api('/conflicts');
   const rows = res.rows || [];
   if (!rows.length) {
     $('panel').innerHTML = '<div class="empty">No barcode conflicts. Every matched barcode points at the product we expect.</div>';
@@ -240,7 +260,7 @@ async function renderConflicts() {
 }
 
 async function renderBlocked() {
-  const res = await (await fetch(API + '/blocked-reasons')).json();
+  const res = await api('/blocked-reasons');
   const groups = res.groups || [];
   $('panel').innerHTML = '<div class="tablewrap"><table><thead><tr>' +
     '<th>Why it isn’t listed</th><th class="num">Products</th><th>How to fix it</th><th>Example</th>' +
