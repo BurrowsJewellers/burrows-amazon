@@ -25,7 +25,7 @@ async function liveListings() {
   for (let page = 0; page < 500; page++) {
     const query = {
       marketplaceIds: config.amazon.marketplaceId,
-      includedData: 'summaries,issues,offers',
+      includedData: 'summaries,issues,offers,attributes',
       pageSize: 20,
       issueLocale: 'en_AU',
     };
@@ -46,12 +46,22 @@ async function liveListings() {
         // has, there is no offer to buy — which is the usual reason a listing is
         // visible but not buyable, and nothing to worry about on the day it is sent.
         hasOffer: (item.offers || []).length > 0,
+        // The price we submitted, against the price Amazon is actually charging. These
+        // disagree for a while after a push, and on a SKU that was listed before, the
+        // price Amazon keeps showing in the meantime is the OLD one.
+        submittedPrice: Number(
+          item.attributes?.purchasable_offer?.[0]?.our_price?.[0]?.schedule?.[0]?.value_with_tax
+        ) || null,
+        shownPrice: Number((item.offers || [])[0]?.price?.amount) || null,
       });
     }
     token = res.pagination?.nextToken || null;
     if (!token) break;
   }
-  return out;
+  // Amazon's paging can hand back the same SKU on two pages. Left alone that
+  // double-counts everything downstream, including the number of listings said to be
+  // selling at the wrong price.
+  return [...new Map(out.map((l) => [l.sku, l])).values()];
 }
 
 async function main() {
@@ -120,6 +130,31 @@ async function main() {
     console.log(`  ${String(n).padStart(4)}  ${plain.slice(0, 110)}`);
   }
   console.log(`\n${opened} new problems recorded, ${closed.rowCount} previously recorded now resolved`);
+
+  // Amazon always gets the full retail price — that is the rule. But a SKU that was
+  // listed before keeps showing its previous price until Amazon ingests the new one,
+  // and the previous price was often a discounted one. While that is true AND the
+  // listing is buyable, someone can buy at the old price. That window is the thing
+  // worth knowing about; a difference on a listing nobody can buy yet is just lag.
+  const mispriced = live.filter(
+    (l) => l.submittedPrice && l.shownPrice && Math.abs(l.submittedPrice - l.shownPrice) > 0.01
+  );
+  const sellingAtWrongPrice = mispriced.filter((l) => l.buyable && l.shownPrice < l.submittedPrice);
+
+  if (mispriced.length) {
+    console.log(`\n${mispriced.length} listings show a different price than we sent`);
+    if (sellingAtWrongPrice.length) {
+      console.log(`  ${sellingAtWrongPrice.length} of those are BUYABLE BELOW our price right now:`);
+      for (const l of sellingAtWrongPrice.slice(0, 10)) {
+        console.log(`    ${l.sku.padEnd(14)} selling at $${l.shownPrice}, should be $${l.submittedPrice}`);
+      }
+      console.log('  Amazon has not taken the new price yet. If this persists past a day,');
+      console.log('  re-send them: node scripts/push.js --only=' +
+        sellingAtWrongPrice.slice(0, 5).map((l) => l.sku).join(','));
+    } else {
+      console.log('  none of them are buyable yet, so nobody can buy at the old price.');
+    }
+  }
 
   // A new SKU with no offer yet is normal for a few hours. A day later it is not: it
   // means the offer we sent never took, and nobody would otherwise notice, because the
