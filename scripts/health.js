@@ -42,6 +42,10 @@ async function liveListings() {
         buyable: status.includes('BUYABLE'),
         issues: item.issues || [],
         price: (item.offers || [])[0]?.price?.amount ?? null,
+        // Amazon takes a while to register a brand-new SKU's price and stock. Until it
+        // has, there is no offer to buy — which is the usual reason a listing is
+        // visible but not buyable, and nothing to worry about on the day it is sent.
+        hasOffer: (item.offers || []).length > 0,
       });
     }
     token = res.pagination?.nextToken || null;
@@ -116,6 +120,26 @@ async function main() {
     console.log(`  ${String(n).padStart(4)}  ${plain.slice(0, 110)}`);
   }
   console.log(`\n${opened} new problems recorded, ${closed.rowCount} previously recorded now resolved`);
+
+  // A new SKU with no offer yet is normal for a few hours. A day later it is not: it
+  // means the offer we sent never took, and nobody would otherwise notice, because the
+  // push reported success and Amazon never says anything more about it.
+  const noOffer = [...new Set(live.filter((l) => !l.hasOffer).map((l) => l.sku))];
+  if (noOffer.length) {
+    const stale = await db.query(
+      `select sku from amazon_listings
+        where sku = any($1) and last_pushed_at < now() - interval '24 hours'`,
+      [noOffer]
+    );
+    console.log(`\n${noOffer.length} listings have no offer registered yet`);
+    if (stale.rows.length) {
+      console.log(`  ${stale.rows.length} of them were sent more than a day ago — that is too long.`);
+      console.log('  Amazon accepted the offer but never registered the price and stock.');
+      console.log('  Re-send these with: node scripts/push.js --only=' + stale.rows.slice(0, 5).map((r) => r.sku).join(','));
+    } else {
+      console.log('  all sent within the last day — Amazon is still working through them, which is normal.');
+    }
+  }
 
   await db.query(
     `update amazon_runs set finished_at = now(), ok = $2, failed = $3, note = $4 where id = $1`,

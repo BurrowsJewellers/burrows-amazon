@@ -64,9 +64,9 @@ async function setQuantity({ sku, quantity }) {
  * Amazon's own message rather than being flattened into "unknown error".
  */
 const TRANSLATIONS = [
-  [/not (?:authorized|approved).*brand|brand.*not.*approved/i,
+  [/not (?:authorized|approved).*brand|brand.*not.*approved|approval to list in this brand/i,
    'Not approved to sell this brand on Amazon',
-   'Apply for brand authorisation in Seller Central, then release these for retry.'],
+   'Amazon gates some brands per seller. Apply in Seller Central under Inventory → Add a Product → Listing Limitations Apply, attaching an invoice from the supplier. Once approved, re-send with: node scripts/push.js --only=<SKU>'],
   [/gtin|ean|upc.*(?:invalid|not found|does not match)/i,
    'Amazon does not accept this barcode for this product',
    'The barcode may be wrong in Retail Edge, or Amazon has it against a different item. Check the barcode on the tag.'],

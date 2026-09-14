@@ -19,6 +19,14 @@ const { putOffer, readResult } = require('../src/amazon/listings');
 const LIMIT = Number(process.argv.find((a) => a.startsWith('--limit='))?.split('=')[1] || 0);
 const DRY = process.argv.includes('--dry-run');
 
+/**
+ * --only=SKU,SKU re-sends named products, for the case where Amazon accepted an offer
+ * but never registered it. Those sit in 'listed' rather than 'ready', so the normal
+ * query would skip them — naming them explicitly is the whole point.
+ */
+const ONLY = (process.argv.find((a) => a.startsWith('--only='))?.split('=')[1] || '')
+  .split(',').map((s) => s.trim()).filter(Boolean);
+
 async function recordError(row, err) {
   await db.query(
     `insert into amazon_errors (barcode, sku, operation, code, message, plain, fix)
@@ -47,12 +55,16 @@ async function main() {
     from amazon_listings a
     join shopify_product_variants v on v.sku = a.sku
     left join retail_edge_products r on r.sku = a.sku
-    where a.state = 'ready'
+    where ${ONLY.length ? `a.sku = any($1) and a.state in ('ready','listed')` : `a.state = 'ready'`}
     order by a.vendor, a.sku
     ${LIMIT ? `limit ${LIMIT}` : ''}
-  `);
+  `, ONLY.length ? [ONLY] : []);
 
-  console.log(`${DRY ? '[dry run] ' : ''}${rows.length} products queued`);
+  console.log(`${DRY ? '[dry run] ' : ''}${rows.length} products queued${ONLY.length ? ` (of ${ONLY.length} named)` : ''}`);
+  if (ONLY.length && rows.length < ONLY.length) {
+    const found = new Set(rows.map((r) => r.sku));
+    console.log(`  not found or not eligible: ${ONLY.filter((s) => !found.has(s)).join(', ')}`);
+  }
 
   let sent = 0, failed = 0, pulled = 0;
 
