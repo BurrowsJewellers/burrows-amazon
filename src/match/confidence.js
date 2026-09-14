@@ -101,12 +101,82 @@ function distinguishersDisagree(ourTitle, amazonTitle) {
 }
 
 /**
+ * Words that describe almost any piece we sell and so tell us nothing about whether
+ * two listings are the same piece. Counting them makes unrelated products look alike:
+ * "Thomas Sabo Blackened Silver Fine Venezia Chain" and "Thomas Sabo Ladies Little
+ * Secret Tree of Love 925 Sterling Silver Chain" share four words and none of them
+ * mean anything — brand twice, metal, and the word chain.
+ */
+const GENERIC = new Set([
+  'silver', 'gold', 'sterling', '925', 'plated', 'rose', 'white', 'yellow', 'black',
+  'steel', 'stainless', 'leather', 'titanium', 'platinum', 'bronze',
+  'necklace', 'bracelet', 'ring', 'earring', 'earrings', 'pendant', 'charm', 'chain',
+  'watch', 'band', 'strap', 'bangle', 'stud', 'studs', 'hoop', 'hoops', 'anklet',
+  'ladies', 'lady', 'mens', 'men', 'women', 'womens', 'unisex', 'girls', 'boys',
+  'the', 'and', 'with', 'for', 'set', 'new', 'size', 'cttw', 'carat',
+]);
+
+/**
+ * Does Amazon's title carry our own product code?
+ *
+ * Manufacturer codes are the strongest evidence there is, stronger than any wording:
+ * our SKU TR2470Y58 against Amazon's "Ladies Gold Teardrop Ring - TR2470-413-39-58" is
+ * the same ring, however little the prose has in common. Sellers punctuate these codes
+ * however they like, so compare them with the punctuation stripped.
+ *
+ * Only the stem is required. The tail of these codes is colour and size, which the
+ * barcode has already pinned down, and demanding the whole thing would reject the very
+ * matches this is meant to rescue.
+ */
+function codeAppears(sku, amazonTitle) {
+  const stem = squash(sku);
+  const theirs = squash(amazonTitle);
+  if (!stem || !theirs) return false;
+
+  const parts = stem.match(/^([a-z]*)(\d+)/);
+  if (!parts) return false;
+  const [, letters, digits] = parts;
+
+  // Both ends of the code vary between our records and Amazon's: they may drop our
+  // leading brand letter (our TX0091S against their X0091-001-12-S) and they almost
+  // always carry a different tail, because the tail is colour and size and the barcode
+  // has already settled those. So try the stem with leading letters progressively
+  // dropped and the digits progressively shortened, longest first.
+  for (let keep = 0; keep <= letters.length; keep++) {
+    const lead = letters.slice(keep);
+    for (let len = digits.length; len >= 3; len--) {
+      const candidate = lead + digits.slice(0, len);
+      // Short codes match by coincidence, and a bare number more easily than one
+      // anchored by letters — so a digits-only candidate has to be longer to count.
+      const floor = lead ? 5 : 6;
+      if (candidate.length < floor) continue;
+      if (theirs.includes(candidate)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The words that actually identify a piece — its product line, its motif — with the
+ * brand and the generic vocabulary stripped out.
+ */
+function distinctive(title, ourVendor, amazonBrand) {
+  const drop = new Set(GENERIC);
+  for (const brand of [ourVendor, amazonBrand]) {
+    for (const w of words(brand)) drop.add(w);
+  }
+  const out = new Set();
+  for (const w of words(title)) if (!drop.has(w) && !/^\d+$/.test(w)) out.add(w);
+  return out;
+}
+
+/**
  * @returns {{confidence: 'high'|'review'|'conflict', note: string}}
  *   high     - list it
  *   review   - a person compares them side by side before anything is listed
  *   conflict - a different product. Permanently blocked, never listable.
  */
-function scoreMatch({ ourVendor, ourTitle, ourPrice, amazonBrand, amazonTitle, amazonPrice }) {
+function scoreMatch({ sku, ourVendor, ourTitle, ourPrice, amazonBrand, amazonTitle, amazonPrice }) {
   const disagreement = distinguishersDisagree(ourTitle, amazonTitle);
   if (disagreement) {
     return { confidence: 'conflict', note: `Same barcode, different item — ${disagreement}` };
@@ -144,6 +214,42 @@ function scoreMatch({ ourVendor, ourTitle, ourPrice, amazonBrand, amazonTitle, a
     };
   }
 
+  // Same brand, but nothing identifying in common. This is the shape that produced
+  // refunds: right maker, right kind of thing, different piece. The overall word
+  // overlap looks reassuring precisely because the words it counts are meaningless.
+  const carriesOurCode = codeAppears(sku, amazonTitle);
+  if (carriesOurCode && !priceNote) {
+    return { confidence: 'high', note: `${brand.why}; Amazon's own title carries our product code` };
+  }
+
+  const ourMarks = distinctive(ourTitle, ourVendor, amazonBrand);
+  const theirMarks = distinctive(amazonTitle, ourVendor, amazonBrand);
+  // Our title says nothing beyond brand and material while Amazon's names a specific
+  // motif. There is nothing to check their claim against, and "a plain chain" against
+  // "a chain with a heart motif" is a refund waiting to happen.
+  if (!ourMarks.size && theirMarks.size) {
+    return {
+      confidence: 'review',
+      note:
+        `Our own description is too generic to confirm this. Amazon's listing is for ` +
+        `"${[...theirMarks].slice(0, 4).join(' ')}" — check that is what we hold.`,
+    };
+  }
+
+  if (ourMarks.size && theirMarks.size) {
+    let shared = 0;
+    for (const w of ourMarks) if (theirMarks.has(w)) shared++;
+    if (!shared) {
+      return {
+        confidence: 'review',
+        note:
+          `Same barcode and the same brand, but nothing in the names matches: ` +
+          `ours is "${[...ourMarks].slice(0, 4).join(' ')}", Amazon's is ` +
+          `"${[...theirMarks].slice(0, 4).join(' ')}". Compare them before listing.`,
+      };
+    }
+  }
+
   if (titleScore >= 0.34 && !priceNote) {
     return { confidence: 'high', note: `${brand.why}; titles agree ${Math.round(titleScore * 100)}%` };
   }
@@ -154,4 +260,4 @@ function scoreMatch({ ourVendor, ourTitle, ourPrice, amazonBrand, amazonTitle, a
   };
 }
 
-module.exports = { scoreMatch, brandAgrees, distinguishersDisagree, similarity };
+module.exports = { scoreMatch, brandAgrees, distinguishersDisagree, similarity, codeAppears, distinctive };

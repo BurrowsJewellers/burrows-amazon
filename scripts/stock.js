@@ -61,8 +61,18 @@ async function main() {
     if (!item) { notOnAmazon++; continue; }
     const amazonQty = quantityOf(item);
     if (amazonQty === null) { settling++; continue; }
-    const want = Math.max(0, row.live_qty);
-    if (amazonQty !== want) needsChange.push({ ...row, amazon_qty: amazonQty, want });
+
+    // Stock is not the only reason something should come off sale. A product that has
+    // fallen out of the states we list from — because the match is now in doubt, or a
+    // rule caught it — is still sitting on Amazon with stock against it until someone
+    // sets that to zero. Withdrawing it is this job's business too: it is the only
+    // thing that talks to Amazon on a schedule.
+    const weWouldList = row.state === 'listed' || row.state === 'ready';
+    const want = weWouldList ? Math.max(0, row.live_qty) : 0;
+
+    if (amazonQty !== want) {
+      needsChange.push({ ...row, amazon_qty: amazonQty, want, withdrawn: !weWouldList });
+    }
   }
 
   // Sold out first, and in stock afterwards. If the run is interrupted half way, the
@@ -71,8 +81,11 @@ async function main() {
   const restock = needsChange.filter((r) => r.want > 0);
   const queue = [...soldOut, ...restock].slice(0, LIMIT || undefined);
 
+  const withdrawing = needsChange.filter((r) => r.withdrawn).length;
+
   console.log(`${DRY ? '[dry run] ' : ''}${rows.length} sent, ${onAmazon.size} found on Amazon`);
-  console.log(`  ${soldOut.length} have sold out and Amazon still shows them available`);
+  console.log(`  ${soldOut.length - withdrawing} have sold out and Amazon still shows them available`);
+  if (withdrawing) console.log(`  ${withdrawing} we no longer intend to list and are coming off sale`);
   console.log(`  ${restock.length} have a quantity on Amazon that is not what we hold`);
   console.log(`  ${settling} are still being set up by Amazon and were left alone`);
   if (notOnAmazon) console.log(`  ${notOnAmazon} are not on Amazon at all`);
@@ -97,8 +110,10 @@ async function main() {
     }
 
     if (DRY) {
-      console.log(`  ${row.sku.padEnd(14)} Amazon has ${String(row.amazon_qty).padStart(3)}, we hold ${String(quantity).padStart(3)}` +
-                  `${quantity === 0 ? '   (comes off sale)' : row.amazon_qty === 0 ? '   (closed — would reopen)' : ''}`);
+      const why = row.withdrawn ? `   (withdrawing — ${row.state})`
+                : quantity === 0 ? '   (sold out — comes off sale)'
+                : row.amazon_qty === 0 ? '   (closed — would reopen)' : '';
+      console.log(`  ${row.sku.padEnd(14)} Amazon has ${String(row.amazon_qty).padStart(3)}, we hold ${String(quantity).padStart(3)}${why}`);
       ok++;
       continue;
     }

@@ -81,6 +81,7 @@ async function main() {
 
     // 2. The match, again. Amazon can re-point a barcode at a different product.
     const scored = scoreMatch({
+      sku: row.sku,
       ourVendor: row.vendor, ourTitle: row.our_title, ourPrice: Number(row.selling_price) || 0,
       amazonBrand: row.amazon_brand, amazonTitle: row.amazon_title, amazonPrice: 0,
     });

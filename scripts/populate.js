@@ -83,6 +83,7 @@ async function main() {
     // 6. Matched — but an exact barcode is not proof. Check what it points at.
     else {
       const scored = scoreMatch({
+        sku: row.sku,
         ourVendor: row.vendor,
         ourTitle: row.our_title,
         ourPrice: Number(row.our_price) || 0,

@@ -1,4 +1,18 @@
-# burrows-amazon: keep the picture current. None of these send anything to Amazon.
-25 */2 * * * /opt/burrows-amazon/run.sh health   >> /var/log/burrows-amazon-health.log 2>&1
+# burrows-amazon
+#
+# The chain, once a day: look up new barcodes, decide what each product's state is,
+# then send the ones that qualify. Each step is safe to run on its own and safe to
+# run twice; push re-checks the brand, the match and the stock immediately before
+# every write, so a stale decision cannot reach Amazon.
+20 5 * * *   /opt/burrows-amazon/run.sh match    >> /var/log/burrows-amazon-match.log 2>&1
 10 6 * * *   /opt/burrows-amazon/run.sh populate >> /var/log/burrows-amazon-populate.log 2>&1
+30 6 * * *   /opt/burrows-amazon/run.sh push     >> /var/log/burrows-amazon-push.log 2>&1
 40 6 * * *   /opt/burrows-amazon/run.sh audit    >> /var/log/burrows-amazon-audit.log 2>&1
+
+# Stock is the safeguard: it corrects quantities against what Amazon actually holds,
+# and withdraws anything we have stopped intending to list. It writes nothing when
+# nothing has moved.
+*/15 * * * * /opt/burrows-amazon/run.sh stock    >> /var/log/burrows-amazon-stock.log 2>&1
+
+# Reads Amazon back and records what it is unhappy about.
+25 */2 * * * /opt/burrows-amazon/run.sh health   >> /var/log/burrows-amazon-health.log 2>&1
