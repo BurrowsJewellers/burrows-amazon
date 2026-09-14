@@ -126,6 +126,8 @@ const FIXES = [
   [/no barcode/i, 'Enter the product’s barcode in Retail Edge.'],
   [/Amazon has no listing/i,
    'Amazon doesn’t carry this product under this barcode. It can’t be offered. Candidate for creating our own listing later.'],
+  [/one-of-a-kind/i,
+   'Waiting on a decision about whether single pieces go on Amazon at all. Nothing to fix — it is a business call, not a data problem.'],
   [/needs a person to confirm/i,
    'Open the Needs a look tab and compare the two products side by side.'],
 ];
@@ -140,6 +142,7 @@ let current = 'ready';
 const TABS = [
   {key:'ready',     label:'Ready to list'},
   {key:'review',    label:'Needs a look'},
+  {key:'held',      label:'On hold'},
   {key:'conflicts', label:'Barcode conflicts'},
   {key:'no_match',  label:'Not on Amazon'},
   {key:'blocked',   label:'Blocked by a rule'},
@@ -158,6 +161,7 @@ async function load() {
     ['good', summary.ready, 'ready to list'],
     ['',     summary.listed, 'live on Amazon'],
     ['warn', summary.review, 'need a look'],
+    ['warn', summary.held, 'on hold'],
     ['bad',  summary.conflicts, 'barcode conflicts'],
     ['',     summary.noMatch, 'not on Amazon'],
     ['',     summary.blocked, 'blocked by a rule'],
@@ -169,6 +173,7 @@ async function load() {
     const n = t.key === 'conflicts' ? summary.conflicts
             : t.key === 'no_match' ? summary.noMatch
             : t.key === 'blocked' ? summary.blocked
+            : t.key === 'held' ? summary.held
             : summary[t.key];
     return `<button role="tab" aria-selected="${t.key===current}" data-tab="${t.key}">${t.label}<span class="count">${(n||0).toLocaleString()}</span></button>`;
   }).join('');

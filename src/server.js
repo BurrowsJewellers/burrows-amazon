@@ -43,6 +43,7 @@ app.get('/api/summary', async (req, res, next) => {
       ready: by.ready || 0,
       noMatch: by.no_match || 0,
       blocked: by.blocked || 0,
+      held: by.held || 0,
       failed: by.failed || 0,
       conflicts: conflicts[0].n,
       openErrors: errors[0].n,
