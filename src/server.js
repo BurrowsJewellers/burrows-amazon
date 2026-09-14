@@ -49,6 +49,9 @@ app.get('/api/summary', async (req, res, next) => {
 
 app.use('/api', require('./routes/listings'));
 
+// The page itself. No build step: it is one file, served as-is.
+app.use(express.static(require('path').join(__dirname, '..', 'web')));
+
 app.use((err, req, res, _next) => {
   console.error('[api]', err.message);
   res.status(err.status || 500).json({ error: err.message });

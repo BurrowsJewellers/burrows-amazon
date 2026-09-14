@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Amazon Channel — Burrows Jewellers</title>
+<style>
+  :root{
+    --bg:#F6F7F9; --card:#FFFFFF; --ink:#1B2130; --muted:#6B7280; --line:#E3E6EB;
+    --accent:#1F3A5F; --good:#17694A; --good-bg:#E8F3EE;
+    --warn:#8A5A12; --warn-bg:#FBF1DF; --bad:#96271F; --bad-bg:#FBEAE8;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1240px;margin:0 auto;padding:26px 22px 70px}
+  h1{font-size:1.55rem;margin:0 0 .2rem;font-weight:650;letter-spacing:-.01em}
+  .sub{color:var(--muted);margin:0 0 1.5rem;font-size:.94rem}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px}
+
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:12px;margin-bottom:18px}
+  .tile{padding:14px 16px}
+  .tile .n{font-size:1.7rem;font-weight:650;letter-spacing:-.02em;line-height:1.1;font-variant-numeric:tabular-nums}
+  .tile .l{color:var(--muted);font-size:.83rem;margin-top:2px}
+  .tile.good .n{color:var(--good)} .tile.warn .n{color:var(--warn)} .tile.bad .n{color:var(--bad)}
+
+  nav.tabs{display:flex;gap:2px;flex-wrap:wrap;margin-bottom:16px;border-bottom:1px solid var(--line)}
+  nav.tabs button{background:none;border:none;border-bottom:2px solid transparent;padding:9px 14px;
+       font:inherit;font-size:.92rem;color:var(--muted);cursor:pointer;border-radius:6px 6px 0 0}
+  nav.tabs button:hover{color:var(--ink);background:#EEF1F5}
+  nav.tabs button[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+  nav.tabs .count{display:inline-block;margin-left:6px;font-size:.76rem;background:#EEF1F5;
+       border-radius:9px;padding:1px 7px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+  .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
+  input[type=search],select{font:inherit;font-size:.9rem;padding:7px 11px;border:1px solid var(--line);
+       border-radius:7px;background:var(--card);color:var(--ink)}
+  input[type=search]{min-width:260px}
+
+  table{width:100%;border-collapse:collapse;font-size:.89rem}
+  th{text-align:left;font-size:.71rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+     font-weight:600;padding:10px 14px;border-bottom:1px solid var(--line);background:#FAFBFC;white-space:nowrap}
+  td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  .tablewrap{overflow-x:auto;border-radius:10px}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.86em;color:var(--accent)}
+  .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .muted{color:var(--muted)}
+
+  .pill{display:inline-block;font-size:.74rem;padding:2px 9px;border-radius:20px;white-space:nowrap;font-weight:600}
+  .pill.ready{background:var(--good-bg);color:var(--good)}
+  .pill.review{background:var(--warn-bg);color:var(--warn)}
+  .pill.conflict,.pill.blocked{background:var(--bad-bg);color:var(--bad)}
+  .pill.no_match,.pill.candidate{background:#EEF1F5;color:var(--muted)}
+  .pill.listed{background:var(--accent);color:#fff}
+
+  .banner{padding:13px 16px;border-radius:9px;margin-bottom:16px;font-size:.92rem}
+  .banner.bad{background:var(--bad-bg);border:1px solid #EBC5C0;color:var(--bad)}
+  .banner.info{background:#EAF0F7;border:1px solid #CFDEEE;color:var(--accent)}
+
+  .conflict-row{display:grid;grid-template-columns:1fr 1fr;gap:0;border-bottom:1px solid var(--line)}
+  .conflict-row > div{padding:13px 16px}
+  .conflict-row .ours{border-right:1px solid var(--line)}
+  .conflict-row h4{margin:0 0 3px;font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600}
+  .conflict-why{grid-column:1/-1;background:var(--bad-bg);color:var(--bad);font-size:.86rem;
+       border-top:1px solid #EBC5C0;padding:9px 16px}
+  @media(max-width:720px){.conflict-row{grid-template-columns:1fr}.conflict-row .ours{border-right:none;border-bottom:1px solid var(--line)}}
+
+  .fix{font-size:.87rem;color:var(--muted);max-width:46ch}
+  .empty{padding:36px;text-align:center;color:var(--muted)}
+  .loading{padding:36px;text-align:center;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Amazon Channel</h1>
+  <p class="sub" id="sub">Loading…</p>
+
+  <div id="writeBanner"></div>
+  <div class="tiles" id="tiles"></div>
+
+  <nav class="tabs" id="tabs"></nav>
+  <div class="card"><div id="panel"><div class="loading">Loading…</div></div></div>
+</div>
+
+<script>
+const API = location.pathname.replace(/\/$/, '') + '/api';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const money = (v) => v == null ? '' : '$' + Number(v).toLocaleString('en-AU', {minimumFractionDigits:2, maximumFractionDigits:2});
+
+// What to actually do about each reason a product isn't listed.
+const FIXES = [
+  [/never listed on Amazon|supplier .* banned|only supplies a banned brand/i,
+   'Not fixable, and not meant to be. Pandora, Von Treskow and Kirstin Ash are never listed on Amazon.'],
+  [/no brand could be determined/i,
+   'Set the brand (or a supplier code we recognise) on this product in Retail Edge.'],
+  [/out of stock/i,
+   'Nothing to do. It returns to the queue automatically when stock comes back.'],
+  [/internal code/i,
+   'The barcode field holds an internal stock number, not a barcode. Ask the supplier for the real GTIN and enter it in Retail Edge.'],
+  [/wrong length/i,
+   'Not a valid barcode length. Get the correct GTIN from the supplier and enter it in Retail Edge.'],
+  [/check digit/i,
+   'Almost certainly mistyped — re-key it from the physical tag. One wrong digit does this.'],
+  [/no barcode/i, 'Enter the product’s barcode in Retail Edge.'],
+  [/Amazon has no listing/i,
+   'Amazon doesn’t carry this product under this barcode. It can’t be offered. Candidate for creating our own listing later.'],
+  [/needs a person to confirm/i,
+   'Open the Needs a look tab and compare the two products side by side.'],
+];
+const fixFor = (reason) => {
+  for (const [re, fix] of FIXES) if (re.test(reason || '')) return fix;
+  return '';
+};
+
+let summary = {};
+let current = 'ready';
+
+const TABS = [
+  {key:'ready',     label:'Ready to list'},
+  {key:'review',    label:'Needs a look'},
+  {key:'conflicts', label:'Barcode conflicts'},
+  {key:'no_match',  label:'Not on Amazon'},
+  {key:'blocked',   label:'Blocked by a rule'},
+];
+
+async function load() {
+  summary = await (await fetch(API + '/summary')).json();
+  $('sub').textContent =
+    `${(summary.ready || 0).toLocaleString()} products ready to list · ${(summary.conflicts || 0).toLocaleString()} barcode conflicts blocked · reading live from Amazon's Australian catalogue`;
+
+  $('writeBanner').innerHTML = summary.writesEnabled
+    ? '<div class="banner info"><b>Writes are enabled.</b> Offers can be sent to Amazon.</div>'
+    : '<div class="banner info"><b>Nothing is being sent to Amazon yet.</b> The channel is switched off, so everything here is analysis only — matching and reporting run, no offers are created.</div>';
+
+  $('tiles').innerHTML = [
+    ['good', summary.ready, 'ready to list'],
+    ['',     summary.listed, 'live on Amazon'],
+    ['warn', summary.review, 'need a look'],
+    ['bad',  summary.conflicts, 'barcode conflicts'],
+    ['',     summary.noMatch, 'not on Amazon'],
+    ['',     summary.blocked, 'blocked by a rule'],
+  ].map(([cls, n, label]) =>
+    `<div class="card tile ${cls}"><div class="n">${(n||0).toLocaleString()}</div><div class="l">${label}</div></div>`
+  ).join('');
+
+  $('tabs').innerHTML = TABS.map(t => {
+    const n = t.key === 'conflicts' ? summary.conflicts
+            : t.key === 'no_match' ? summary.noMatch
+            : t.key === 'blocked' ? summary.blocked
+            : summary[t.key];
+    return `<button role="tab" aria-selected="${t.key===current}" data-tab="${t.key}">${t.label}<span class="count">${(n||0).toLocaleString()}</span></button>`;
+  }).join('');
+
+  $('tabs').onclick = (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    current = b.dataset.tab;
+    [...$('tabs').children].forEach(x => x.setAttribute('aria-selected', x.dataset.tab === current));
+    render();
+  };
+
+  render();
+}
+
+async function render() {
+  $('panel').innerHTML = '<div class="loading">Loading…</div>';
+  if (current === 'conflicts') return renderConflicts();
+  if (current === 'blocked')   return renderBlocked();
+  return renderList(current);
+}
+
+async function renderList(state) {
+  const q = $('q') ? $('q').value : '';
+  const res = await (await fetch(`${API}/listings?state=${state}&limit=300&q=${encodeURIComponent(q)}`)).json();
+  const rows = res.rows || [];
+
+  const search = `<div class="toolbar"><input type="search" id="q" placeholder="Search SKU, barcode or title…" value="${esc(q)}"></div>`;
+
+  if (!rows.length) {
+    $('panel').innerHTML = search + '<div class="empty">Nothing here.</div>';
+    wireSearch();
+    return;
+  }
+
+  const showWhy = state !== 'ready';
+  $('panel').innerHTML = search + '<div class="tablewrap"><table><thead><tr>' +
+    '<th>SKU</th><th>Barcode</th><th>Product</th><th>Brand</th><th class="num">Price</th><th class="num">Stock</th>' +
+    (state === 'ready' ? '<th>Matched to</th>' : '') +
+    (showWhy ? '<th>Why it isn’t listed</th><th>How to fix it</th>' : '') +
+    '</tr></thead><tbody>' +
+    rows.map(r => `<tr>
+      <td><code>${esc(r.sku)}</code></td>
+      <td><code>${esc(r.barcode)}</code></td>
+      <td>${esc(r.our_title || '').slice(0,58)}</td>
+      <td>${esc(r.vendor)}</td>
+      <td class="num">${money(r.our_price)}</td>
+      <td class="num">${r.qty}</td>
+      ${state === 'ready' ? `<td><code>${esc(r.asin||'')}</code><div class="muted" style="font-size:.83rem">${esc((r.amazon_title||'').slice(0,42))}</div></td>` : ''}
+      ${showWhy ? `<td>${esc(r.state_reason || r.match_note || '')}</td><td class="fix">${esc(fixFor(r.state_reason || r.match_note))}</td>` : ''}
+    </tr>`).join('') +
+    '</tbody></table></div>';
+  wireSearch();
+}
+
+function wireSearch() {
+  const el = $('q');
+  if (!el) return;
+  let t;
+  el.oninput = () => { clearTimeout(t); t = setTimeout(render, 350); };
+}
+
+async function renderConflicts() {
+  const res = await (await fetch(API + '/conflicts')).json();
+  const rows = res.rows || [];
+  if (!rows.length) {
+    $('panel').innerHTML = '<div class="empty">No barcode conflicts. Every matched barcode points at the product we expect.</div>';
+    return;
+  }
+  $('panel').innerHTML =
+    `<div class="banner bad" style="margin:16px"><b>These barcodes point at a different product on Amazon.</b>
+      Amazon's catalogue is entered by sellers and never checked against GS1, so a barcode can end up attached to
+      the wrong item. These are blocked permanently and cannot be listed from this screen — the only thing that
+      clears one is the barcode changing in Retail Edge.</div>` +
+    rows.map(r => `
+      <div class="conflict-row">
+        <div class="ours">
+          <h4>Our product</h4>
+          <div>${esc(r.our_title)}</div>
+          <div class="muted" style="font-size:.85rem">${esc(r.our_vendor)} · <code>${esc(r.sku)}</code> · ${money(r.our_price)}</div>
+        </div>
+        <div>
+          <h4>What Amazon has on barcode ${esc(r.barcode)}</h4>
+          <div>${esc(r.amazon_title)}</div>
+          <div class="muted" style="font-size:.85rem">${esc(r.amazon_brand || 'no brand listed')} · <code>${esc(r.asin)}</code></div>
+        </div>
+        <div class="conflict-why">${esc(r.reason)}</div>
+      </div>`).join('');
+}
+
+async function renderBlocked() {
+  const res = await (await fetch(API + '/blocked-reasons')).json();
+  const groups = res.groups || [];
+  $('panel').innerHTML = '<div class="tablewrap"><table><thead><tr>' +
+    '<th>Why it isn’t listed</th><th class="num">Products</th><th>How to fix it</th><th>Example</th>' +
+    '</tr></thead><tbody>' +
+    groups.map(g => `<tr>
+      <td><b>${esc(g.reason)}</b></td>
+      <td class="num">${Number(g.products).toLocaleString()}</td>
+      <td class="fix">${esc(fixFor(g.sample_reason)) || '<span class="muted">—</span>'}</td>
+      <td class="muted"><code>${esc(g.sample_sku||'')}</code> ${esc((g.sample_title||'').slice(0,34))}</td>
+    </tr>`).join('') + '</tbody></table></div>';
+}
+
+load().catch(err => { $('panel').innerHTML = `<div class="empty">Could not load: ${esc(err.message)}</div>`; });
+</script>
+</body>
+</html>
