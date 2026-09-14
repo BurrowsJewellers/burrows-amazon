@@ -17,9 +17,6 @@ const { scoreMatch } = require('../src/match/confidence');
 
 const DROPSHIP_LOCATION = 96955793713;
 
-/** Single pieces stay off Amazon until the owner decides. See below. */
-const HOLD_SINGLE_PIECES = true;
-
 async function main() {
   const started = await db.query(
     `insert into amazon_runs (job) values ('populate') returning id`
@@ -111,15 +108,13 @@ async function main() {
       } else if (scored.confidence === 'review') {
         state = 'review';
         reason = 'needs a person to confirm it is the same product';
-      } else if (row.qty === 1 && HOLD_SINGLE_PIECES) {
-        // Parked on the owner's instruction, 14 Sep 2026, pending a decision on
-        // whether one-of-a-kind stock belongs on Amazon at all. A single piece can
-        // sell in a shop and on Amazon within the same minute, and cancellations
-        // are what Amazon suspends accounts over. Visible rather than silently
-        // dropped: the moment the decision is made this is one flag.
-        state = 'held';
-        reason = 'one-of-a-kind — single pieces are on hold pending a decision';
       } else {
+        // Single pieces used to be held here. Released on the owner's decision,
+        // 14 Sep 2026: a barcode match is a barcode match, and holding a third of the
+        // matched catalogue back earned nothing. The risk it was guarding against is
+        // real but belongs elsewhere — a piece that sells over the counter has to come
+        // off Amazon before someone buys it there, because cancelling is what Amazon
+        // penalises. That is the stock sync's job, not a reason to stay unlisted.
         state = 'ready';
       }
     }
