@@ -15,4 +15,4 @@
 */15 * * * * /opt/burrows-amazon/run.sh stock    >> /var/log/burrows-amazon-stock.log 2>&1
 
 # Reads Amazon back and records what it is unhappy about.
-25 */2 * * * /opt/burrows-amazon/run.sh health   >> /var/log/burrows-amazon-health.log 2>&1
+*/30 * * * *  /opt/burrows-amazon/run.sh health   >> /var/log/burrows-amazon-health.log 2>&1

@@ -48,11 +48,16 @@ router.get('/listings', async (req, res, next) => {
  */
 router.get('/conflicts', async (req, res, next) => {
   try {
+    // Only products that are in conflict now. The table keeps the history, but a
+    // product that has since been blocked for another reason is not a live conflict
+    // and listing it here made this tab disagree with the count above it.
     const { rows } = await db.query(
-      `select barcode, sku, our_title, our_vendor, our_price,
-              asin, amazon_title, amazon_brand, amazon_image, reason,
-              first_seen_at, last_seen_at
-       from amazon_conflicts order by last_seen_at desc limit 500`
+      `select c.barcode, c.sku, c.our_title, c.our_vendor, c.our_price,
+              c.asin, c.amazon_title, c.amazon_brand, c.amazon_image, c.reason,
+              c.first_seen_at, c.last_seen_at
+       from amazon_conflicts c
+       join amazon_listings a on a.sku = c.sku and a.state = 'conflict'
+       order by c.last_seen_at desc limit 500`
     );
     res.json({ rows });
   } catch (err) { next(err); }

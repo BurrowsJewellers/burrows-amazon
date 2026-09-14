@@ -34,24 +34,36 @@ app.get('/api/summary', async (req, res, next) => {
       `select state, count(*)::int as n from amazon_listings group by state`
     );
     const by = Object.fromEntries(rows.map((r) => [r.state, r.n]));
-    const { rows: conflicts } = await db.query('select count(*)::int as n from amazon_conflicts');
+    // Counted from the products, not from the conflicts table. That table keeps every
+    // conflict ever recorded, including ones whose product has since moved on for some
+    // other reason, so counting it made this tile disagree with its own tab.
+    const { rows: conflicts } = await db.query(
+      `select count(*)::int as n from amazon_listings where state = 'conflict'`);
+    // Products with a problem, not problem rows. One listing can carry four
+    // complaints, and counting those as four makes the screen read as four times
+    // worse than it is.
     const { rows: errors } = await db.query(
-      'select count(*)::int as n from amazon_errors where resolved_at is null'
+      'select count(distinct sku)::int as n from amazon_errors where resolved_at is null'
     );
     // Sent and buyable are different things: Amazon accepts an offer immediately and
-    // decides whether to show it later, so the screen reports both.
+    // decides whether to show it later. A third group has been sent since the last
+    // health pass and has no status yet — counted separately, because leaving it out
+    // meant the figures on screen did not add up to the number we had sent.
     const { rows: live } = await db.query(
       `select count(*) filter (where buyable)::int              as buyable,
               count(*) filter (where listing_status is not null
                                  and not coalesce(buyable,false))::int as visible_only,
+              count(*) filter (where listing_status is null)::int      as unchecked,
               max(status_checked_at)                            as checked_at
        from amazon_listings where state = 'listed'`
     );
     res.json({
       buyable: live[0].buyable,
       visibleNotBuyable: live[0].visible_only,
+      notYetChecked: live[0].unchecked,
       statusCheckedAt: live[0].checked_at,
       listed: by.listed || 0,
+      review: by.review || 0,
       ready: by.ready || 0,
       noMatch: by.no_match || 0,
       blocked: by.blocked || 0,

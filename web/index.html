@@ -161,17 +161,32 @@ async function load() {
     `${(summary.conflicts || 0).toLocaleString()} barcode conflicts blocked · ` +
     `status last read back from Amazon ${checked}`;
 
-  $('writeBanner').innerHTML = summary.writesEnabled
-    ? '<div class="banner info"><b>Writes are enabled.</b> Offers can be sent to Amazon.</div>'
-    : '<div class="banner info"><b>Nothing is being sent to Amazon yet.</b> The channel is switched off, so everything here is analysis only — matching and reporting run, no offers are created.</div>';
+  // A reading taken before the last push makes a healthy account look broken — the
+  // figures were right when they were taken and wrong by the time they were read.
+  const ageMins = summary.statusCheckedAt
+    ? Math.round((Date.now() - new Date(summary.statusCheckedAt).getTime()) / 60000)
+    : null;
+  const stale = ageMins === null || ageMins > 45
+    ? `<div class="banner info"><b>These figures were last read back from Amazon
+        ${ageMins === null ? 'never' : ageMins + ' minutes ago'}.</b>
+        Anything listed since then is counted under <i>sent, not checked yet</i> rather
+        than where it belongs. The check runs every half hour.</div>`
+    : '';
 
+  $('writeBanner').innerHTML = stale + (summary.writesEnabled
+    ? '<div class="banner info"><b>Writes are enabled.</b> Offers can be sent to Amazon.</div>'
+    : '<div class="banner info"><b>Nothing is being sent to Amazon yet.</b> The channel is switched off, so everything here is analysis only — matching and reporting run, no offers are created.</div>');
+
+  // The first three account for everything we have sent, so they add up to it.
+  // The rest are what has not been sent, and why.
   $('tiles').innerHTML = [
     ['good', summary.buyable, 'people can buy'],
     ['warn', summary.visibleNotBuyable, 'sent, not buyable yet'],
+    ['',     summary.notYetChecked, 'sent, not checked yet'],
     ['bad',  summary.openErrors, 'Amazon is unhappy'],
-    ['good', summary.ready, 'ready to list'],
-    ['warn', summary.held, 'on hold'],
+    ['warn', summary.review, 'need a look'],
     ['bad',  summary.conflicts, 'barcode conflicts'],
+    ['good', summary.ready, 'ready to list'],
     ['',     summary.noMatch, 'not on Amazon'],
     ['',     summary.blocked, 'blocked by a rule'],
   ].map(([cls, n, label]) =>
