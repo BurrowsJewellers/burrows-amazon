@@ -77,14 +77,19 @@ app.get('/api/summary', async (req, res, next) => {
     // Stage 2 readiness, so the tab carries a count like the others. The table only
     // exists once that pass has run, so a missing table is not an error here.
     let ownBrandReady = 0;
+    let ownBrandCreated = 0;
     try {
-      const { rows: ob } = await db.query(
-        "select count(*)::int as n from amazon_own_brand where state = 'ready'");
-      ownBrandReady = ob[0].n;
-    } catch (err) { ownBrandReady = 0; }
+      const { rows: ob } = await db.query(`
+        select count(*) filter (where state = 'ready')::int  as ready,
+               count(*) filter (where state = 'listed')::int as created
+        from amazon_own_brand`);
+      ownBrandReady = ob[0].ready;
+      ownBrandCreated = ob[0].created;
+    } catch (err) { ownBrandReady = 0; ownBrandCreated = 0; }
 
     res.json({
       ownBrandReady,
+      ownBrandCreated,
       buyable: live[0].buyable,
       visibleNotBuyable: live[0].visible_only,
       notYetChecked: live[0].unchecked,

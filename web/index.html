@@ -144,7 +144,6 @@ const TABS = [
   {key:'problems',  label:'Amazon is unhappy'},
   {key:'ready',     label:'Ready to list'},
   {key:'review',    label:'Needs a look'},
-  {key:'held',      label:'On hold'},
   {key:'conflicts', label:'Barcode conflicts'},
   {key:'no_match',  label:'Not on Amazon'},
   {key:'blocked',   label:'Blocked by a rule'},
@@ -200,7 +199,7 @@ async function load() {
             : t.key === 'blocked' ? summary.blocked
             : t.key === 'held' ? summary.held
             : t.key === 'problems' ? summary.openErrors
-            : t.key === 'ownbrand' ? summary.ownBrandReady
+            : t.key === 'ownbrand' ? summary.ownBrandCreated
             : summary[t.key];
     return `<button role="tab" aria-selected="${t.key===current}" data-tab="${t.key}">${t.label}<span class="count">${(n||0).toLocaleString()}</span></button>`;
   }).join('');
