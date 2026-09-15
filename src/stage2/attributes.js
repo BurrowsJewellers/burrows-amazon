@@ -161,9 +161,9 @@ function buildListing(row, { marketplaceId, exemption = true }) {
     supplier_declared_dg_hz_regulation: [{ ...m, value: 'not_applicable' }],
     condition_type: [{ ...m, value: 'new_new' }],
     part_number: [{ ...m, value: row.sku }],
-    material: [{ ...L, value: row.metal }],
+    material: [{ ...L, value: metalSource || metal.type.replace(/_/g, ' ') }],
     department: [{ ...L, value: 'womens' }],
-    color: [{ ...L, value: row.colour || row.metal }],
+    color: [{ ...L, value: row.colour || metalSource || metal.type.replace(/_/g, ' ') }],
     metal_type: [{ ...L, value: metal.type }],
     metals: [{ ...m, id: 1, metal_type: val(metal.type), metal_stamp: val(metal.stamp) }],
     main_product_image_locator: [{ ...m, media_location: row.image_url }],
@@ -179,11 +179,12 @@ function buildListing(row, { marketplaceId, exemption = true }) {
     attributes.supplier_declared_has_product_identifier_exemption = [{ ...m, value: true }];
   }
 
-  if (stone) {
-    attributes.gem_type = [{ ...L, value: stone }];
-    attributes.stones = [{ ...m, id: 1, type: val(stone),
-      creation_method: val('natural'), treatment_method: val('not_enhanced') }];
-  }
+  // These are required whether or not the piece has a stone, and Amazon provides the
+  // value for when it does not.
+  const gem = stone || 'No Gemstone';
+  attributes.gem_type = [{ ...L, value: gem }];
+  attributes.stones = [{ ...m, id: 1, type: val(gem),
+    creation_method: val('natural'), treatment_method: val('not_enhanced') }];
 
   if (usSize) {
     attributes.ring = [{ ...m,
