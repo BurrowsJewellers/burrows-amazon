@@ -45,7 +45,15 @@ async function main() {
     where v.variant_id is not null
   `);
 
-  console.log(`considering ${rows.length} products`);
+  // Products Stage 2 has authored a page for. Without this, the barcode is the only
+  // thing consulted and a product we have listed ourselves keeps being reported as one
+  // Amazon does not carry — which is exactly what it no longer is.
+  const authored = new Set(
+    (await db.query("select sku from amazon_own_brand where state = 'listed'")).rows.map((r) => r.sku)
+  );
+
+  console.log(`considering ${rows.length} products` +
+    (authored.size ? `, ${authored.size} of which we have authored a page for` : ''));
 
   const counts = {};
   const bump = (k) => (counts[k] = (counts[k] || 0) + 1);
@@ -60,27 +68,34 @@ async function main() {
       state = 'blocked';
       reason = brand.reason;
     }
-    // 2. No usable barcode means no exact match is possible, and we never guess.
+    // 2. We wrote the page for this one ourselves, so whether Amazon happens to carry
+    //    the barcode is beside the point — it carries the product. Out of stock still
+    //    falls through below, because a listing with nothing behind it must come down.
+    else if (authored.has(row.sku) && row.qty > 0) {
+      state = 'listed';
+      reason = 'we created this listing ourselves rather than matching an existing one';
+    }
+    // 3. No usable barcode means no exact match is possible, and we never guess.
     else if (!isValidGtin(row.barcode)) {
       state = 'blocked';
       reason = explainGtin(row.barcode);
     }
-    // 3. Nothing to sell.
+    // 4. Nothing to sell.
     else if (row.qty <= 0) {
       state = 'blocked';
       reason = 'out of stock everywhere';
     }
-    // 4. Not looked up yet.
+    // 5. Not looked up yet.
     else if (!row.match_state) {
       state = 'candidate';
       reason = 'not yet looked up in Amazon’s catalogue';
     }
-    // 5. Amazon has never heard of this barcode.
+    // 6. Amazon has never heard of this barcode.
     else if (row.match_state !== 'hit') {
       state = 'no_match';
       reason = 'Amazon has no listing for this barcode';
     }
-    // 6. Matched — but an exact barcode is not proof. Check what it points at.
+    // 7. Matched — but an exact barcode is not proof. Check what it points at.
     else {
       const scored = scoreMatch({
         sku: row.sku,
