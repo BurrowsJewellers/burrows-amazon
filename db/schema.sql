@@ -97,3 +97,38 @@ create table if not exists amazon_runs (
 alter table amazon_listings add column if not exists listing_status text;
 alter table amazon_listings add column if not exists buyable boolean;
 alter table amazon_listings add column if not exists status_checked_at timestamptz;
+
+-- Stage 2: our own brand, listed by creating the product page rather than matching an
+-- existing one. Kept separate from amazon_listings, which is keyed on barcode — these
+-- pieces have none, which is the whole reason they need this route.
+create table if not exists amazon_own_brand (
+  sku            text primary key,
+  vendor         text,
+  title          text,
+  description    text,
+  price          numeric(10,2),
+  qty            integer,
+  product_type   text,
+  amazon_type    text,
+  metal          text,
+  stone          text,
+  colour         text,
+  ring_size      text,
+  us_ring_size   text,
+  image_url      text,
+  image_count    integer,
+  state          text not null default 'draft',
+  --   draft      not looked at yet
+  --   not_ready  something Amazon insists on is missing from our own data
+  --   ready      Amazon validated it; waiting only on brand approval
+  --   blocked    Amazon refused it for a reason we cannot fix from here
+  --   listed     created on Amazon
+  state_reason   text,
+  issues         jsonb,
+  validated_at   timestamptz,
+  listed_at      timestamptz,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now()
+);
+
+create index if not exists amazon_own_brand_state_idx on amazon_own_brand (state);
