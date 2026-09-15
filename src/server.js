@@ -57,7 +57,17 @@ app.get('/api/summary', async (req, res, next) => {
               max(status_checked_at)                            as checked_at
        from amazon_listings where state = 'listed'`
     );
+    // Stage 2 readiness, so the tab carries a count like the others. The table only
+    // exists once that pass has run, so a missing table is not an error here.
+    let ownBrandReady = 0;
+    try {
+      const { rows: ob } = await db.query(
+        "select count(*)::int as n from amazon_own_brand where state = 'ready'");
+      ownBrandReady = ob[0].n;
+    } catch (err) { ownBrandReady = 0; }
+
     res.json({
+      ownBrandReady,
       buyable: live[0].buyable,
       visibleNotBuyable: live[0].visible_only,
       notYetChecked: live[0].unchecked,

@@ -122,4 +122,41 @@ router.get('/blocked-reasons', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+/**
+ * Stage 2: our own pieces, which have to have their product page created rather than
+ * matched. Grouped by what is standing in the way, because the answer for most of them
+ * is the same one thing and a list of 700 rows would hide that.
+ */
+router.get('/own-brand', async (req, res, next) => {
+  try {
+    const { rows: summary } = await db.query(`
+      select state, count(*)::int as n, sum(price)::numeric as value
+      from amazon_own_brand group by state order by n desc`);
+
+    const { rows: blockers } = await db.query(`
+      select case
+               when state_reason ilike '%has not been approved%'
+                 then 'Amazon has not approved the brand yet'
+               when state_reason ilike '%aren''t complete enough%'
+                 then 'Amazon wants more detail before it will create a page'
+               else coalesce(state_reason, 'Unknown')
+             end                                   as reason,
+             count(*)::int                         as products,
+             sum(price)::numeric                   as value,
+             (array_agg(sku order by price desc))[1]   as sample_sku,
+             (array_agg(title order by price desc))[1] as sample_title
+      from amazon_own_brand
+      where state in ('blocked','not_ready')
+      group by 1 order by 2 desc limit 25`);
+
+    const { rows: ready } = await db.query(`
+      select sku, title, price, qty, product_type, amazon_type, metal, stone,
+             ring_size, us_ring_size, image_count
+      from amazon_own_brand where state = 'ready'
+      order by price desc limit 300`);
+
+    res.json({ summary, blockers, ready });
+  } catch (err) { next(err); }
+});
+
 module.exports = router;

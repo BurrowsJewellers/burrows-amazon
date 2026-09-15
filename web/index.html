@@ -148,6 +148,7 @@ const TABS = [
   {key:'conflicts', label:'Barcode conflicts'},
   {key:'no_match',  label:'Not on Amazon'},
   {key:'blocked',   label:'Blocked by a rule'},
+  {key:'ownbrand',  label:'Our own brand'},
 ];
 
 async function load() {
@@ -199,6 +200,7 @@ async function load() {
             : t.key === 'blocked' ? summary.blocked
             : t.key === 'held' ? summary.held
             : t.key === 'problems' ? summary.openErrors
+            : t.key === 'ownbrand' ? summary.ownBrandReady
             : summary[t.key];
     return `<button role="tab" aria-selected="${t.key===current}" data-tab="${t.key}">${t.label}<span class="count">${(n||0).toLocaleString()}</span></button>`;
   }).join('');
@@ -219,6 +221,7 @@ async function render() {
   if (current === 'conflicts') return renderConflicts();
   if (current === 'blocked')   return renderBlocked();
   if (current === 'problems')  return renderProblems();
+  if (current === 'ownbrand')  return renderOwnBrand();
   return renderList(current);
 }
 
@@ -338,6 +341,67 @@ async function renderProblems() {
         </tbody></table></div>
         ${(g.items || []).length > 40 ? `<div class="muted" style="margin-top:8px;font-size:.85rem">…and ${(g.items.length - 40).toLocaleString()} more</div>` : ''}
       </div>`).join('');
+}
+
+/**
+ * Stage 2 — our own pieces, which need their Amazon page created rather than matched.
+ * Leads with what is standing in the way, because for most of them it is one thing.
+ */
+async function renderOwnBrand() {
+  const res = await api('/own-brand');
+  const summary = res.summary || [];
+  const blockers = res.blockers || [];
+  const ready = res.ready || [];
+
+  if (!summary.length) {
+    $('panel').innerHTML = '<div class="empty">Nothing checked yet. The Stage 2 pass has not run.</div>';
+    return;
+  }
+
+  const by = Object.fromEntries(summary.map(s => [s.state, s]));
+  const money0 = (v) => '$' + Math.round(Number(v || 0)).toLocaleString();
+  const readyN = by.ready?.n || 0;
+  const readyVal = by.ready?.value || 0;
+
+  $('panel').innerHTML =
+    `<div class="banner info" style="margin:0 0 14px">
+      <b>These are pieces we make ourselves.</b> Amazon has never carried them, because nobody ever
+      issued them a barcode — so instead of matching an existing listing, we have to create the page.
+      That is only allowed for a brand we own, which is why this covers Burrows Collection and nothing else.
+      Amazon has checked the ones below without creating anything.
+     </div>` +
+    '<div class="tiles" style="margin-bottom:16px">' +
+    [['good', readyN, 'our data is good enough', money0(readyVal)],
+     ['warn', by.not_ready?.n || 0, 'missing something of ours', money0(by.not_ready?.value)],
+     ['bad',  by.blocked?.n || 0, 'Amazon will not accept yet', money0(by.blocked?.value)],
+     ['',     by.listed?.n || 0, 'created on Amazon', money0(by.listed?.value)],
+    ].map(([cls, n, label, val]) =>
+      `<div class="card tile ${cls}"><div class="n">${(n||0).toLocaleString()}</div>` +
+      `<div class="l">${label}</div><div class="l" style="opacity:.75">${val}</div></div>`).join('') +
+    '</div>' +
+    '<div class="tablewrap"><table><thead><tr>' +
+    '<th>What is standing in the way</th><th class="num">Products</th><th class="num">Retail</th><th>Example</th>' +
+    '</tr></thead><tbody>' +
+    blockers.map(b => `<tr>
+      <td><b>${esc(b.reason)}</b></td>
+      <td class="num">${Number(b.products).toLocaleString()}</td>
+      <td class="num">${money0(b.value)}</td>
+      <td class="muted"><code>${esc(b.sample_sku||'')}</code> ${esc((b.sample_title||'').slice(0,34))}</td>
+    </tr>`).join('') + '</tbody></table></div>' +
+    (ready.length ? `<h3 style="margin:22px 0 8px;font-size:1rem">Ready the moment the brand is approved</h3>
+      <div class="tablewrap"><table><thead><tr>
+      <th>SKU</th><th>Product</th><th>Category</th><th>Metal</th><th>Stone</th><th>Size</th>
+      <th class="num">Price</th><th class="num">Photos</th></tr></thead><tbody>` +
+      ready.map(r => `<tr>
+        <td><code>${esc(r.sku)}</code></td>
+        <td>${esc((r.title||'').slice(0,46))}</td>
+        <td class="muted">${esc(r.amazon_type||'')}</td>
+        <td>${esc(r.metal||'')}</td>
+        <td>${esc(r.stone && !/^n\/?a$/i.test(r.stone) ? r.stone : '—')}</td>
+        <td>${esc(r.us_ring_size ? r.ring_size + ' (US ' + r.us_ring_size + ')' : '—')}</td>
+        <td class="num">${money(r.price)}</td>
+        <td class="num">${r.image_count}</td>
+      </tr>`).join('') + '</tbody></table></div>' : '');
 }
 
 async function renderBlocked() {
