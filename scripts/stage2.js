@@ -3,10 +3,15 @@
 /**
  * Stage 2 — listing our own pieces by creating the product page.
  *
- * Stage 1 can only offer against a product Amazon already carries, which house-made
- * jewellery never is: nobody ever issued it a barcode. This is the other route, and it
- * is deliberately limited to brands we own. Creating a page for someone else's brand
- * needs their authorisation, and Amazon refuses it outright.
+ * Stage 1 can only offer against a product Amazon already carries. This is the other
+ * route: authoring the page ourselves.
+ *
+ * It began limited to brands we make, on the assumption that Amazon would refuse to let
+ * us author anyone else's. Tested against the live API on 15 Sep 2026, that assumption
+ * was wrong — of every brand we stock, not one was refused. What keeps those products
+ * off Amazon is gaps in our own data, not permission. So this covers the catalogue, and
+ * the two cases differ only in the product identifier: our own pieces have never had a
+ * barcode and claim the exemption, everything else supplies its real one.
  *
  * It asks Amazon to validate every piece before anything is created, and by default
  * that is all it does. Validation costs nothing and changes nothing, but tells us per
@@ -19,15 +24,32 @@ const db = require('../src/db');
 const config = require('../src/config');
 const { request } = require('../src/amazon/client');
 const { buildListing } = require('../src/stage2/attributes');
+const { checkBrand } = require('../src/rules/brands');
+const { isValidGtin } = require('../src/match/gtin');
 const { toAmazonSize } = require('../src/stage2/ringsize');
 
 const SUBMIT = process.argv.includes('--submit');
 const LIMIT = Number(process.argv.find((a) => a.startsWith('--limit='))?.split('=')[1] || 0);
 const ONLY = (process.argv.find((a) => a.startsWith('--only='))?.split('=')[1] || '')
   .split(',').map((s) => s.trim()).filter(Boolean);
+const OWN_ONLY = process.argv.includes('--own-brand-only');
 
-/** Brands we own, and may therefore create product pages for. */
+/**
+ * Brands we make ourselves. These are the ones with no barcode, so they are the ones
+ * that need the identifier exemption — everything else carries a real one.
+ */
 const OWN_BRANDS = ['burrows collection', 'burrows jewellers'];
+
+/**
+ * Other people's brands were left out of this at first, on the assumption that Amazon
+ * would refuse to let us author their pages. Tested against the live API on 15 Sep
+ * 2026 and that assumption was wrong: of every brand we stock, not one was refused.
+ * What stops those products is our own data, not Amazon's permission — so they belong
+ * in this pass, where the gaps get measured instead of assumed.
+ *
+ * The brand ban still applies, and is applied explicitly here rather than relied upon
+ * as a side effect of the old filter.
+ */
 
 /**
  * Photographs, from the shop's own public product feed.
@@ -82,6 +104,7 @@ const SELECT = [
   '       p.product_type, p.handle,',
   '       r.s_metal_type as metal, r.s_stone_type as stone,',
   '       r.metal_colour as colour, r.ring_size, r.bracelet_length as length,',
+  '       a.barcode,',
   '       r.marketing_description as description',
   'from amazon_listings a',
   'join shopify_product_variants v on v.sku = a.sku',
@@ -99,7 +122,9 @@ async function main() {
   }
 
   const params = [...OWN_BRANDS];
-  const brandFilter = OWN_BRANDS.map((_, i) => 'lower(a.vendor) = $' + (i + 1)).join(' or ');
+  const brandFilter = OWN_ONLY
+    ? OWN_BRANDS.map((_, i) => 'lower(a.vendor) = $' + (i + 1)).join(' or ')
+    : 'true';
   let skuFilter = '';
   if (ONLY.length) {
     params.push(ONLY);
@@ -128,7 +153,30 @@ async function main() {
     row.description = row.description || photos.description;
     if (row.ring_size) row.us_ring_size = toAmazonSize(row.ring_size).us;
 
-    const built = buildListing(row, { marketplaceId: config.amazon.marketplaceId });
+    // Never for a banned brand, whatever else is true of it.
+    const brand = checkBrand({ vendor: row.vendor });
+    if (!brand.allowed) {
+      await record(row, {}, 'blocked', brand.reason, null);
+      bump('blocked');
+      continue;
+    }
+
+    // Our own pieces have no barcode and need the exemption. Everything else has a
+    // real one, and supplying it is both more honest and more likely to be accepted.
+    const own = OWN_BRANDS.includes(String(row.vendor || '').toLowerCase());
+    const gtin = isValidGtin(row.barcode) ? String(row.barcode).trim() : null;
+
+    const built = buildListing(row, {
+      marketplaceId: config.amazon.marketplaceId,
+      exemption: own || !gtin,
+    });
+    if (built.ok && gtin && !own) {
+      built.body.attributes.externally_assigned_product_identifier = [{
+        marketplace_id: config.amazon.marketplaceId,
+        type: gtin.length === 12 ? 'upc' : 'ean',
+        value: gtin,
+      }];
+    }
     let state;
     let reason = null;
     let issues = null;

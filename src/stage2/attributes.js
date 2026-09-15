@@ -26,10 +26,15 @@ const METALS = [
   [/yellow\s*gold/i, 'yellow_gold', null],
   [/white\s*gold/i, 'white_gold', null],
   [/rose\s*gold/i, 'rose_gold', null],
+  [/\bplated\b/i, 'gold_plated', null],
   [/\bgold\b/i, 'gold', null],
   [/\bsilver\b/i, 'silver', null],
   [/titanium/i, 'titanium', null],
   [/stainless/i, 'stainless_steel', null],
+  [/leather/i, 'leather', null],
+  [/non[- ]?precious|base\s*metal|alloy/i, 'alloy', null],
+  [/\bceramic\b/i, 'ceramic', null],
+  [/\bbrass\b/i, 'brass', null],
 ];
 
 /** Stones, as Amazon names them. "N/A" in our data means a plain metal piece. */
@@ -40,11 +45,23 @@ const STONES = [
   [/aquamarine/i, 'aquamarine'], [/peridot/i, 'peridot'], [/citrine/i, 'citrine'],
   [/tanzanite/i, 'tanzanite'], [/turquoise/i, 'turquoise'], [/onyx/i, 'onyx'],
   [/cubic\s*zirconia|\bcz\b/i, 'cubic_zirconia'], [/moissanite/i, 'moissanite'],
+  [/morganite/i, 'morganite'], [/quartz/i, 'quartz'], [/crystal/i, 'crystal'],
+  [/tourmaline/i, 'tourmaline'], [/lapis/i, 'lapis_lazuli'], [/\bjade\b/i, 'jade'],
+  [/moonstone/i, 'moonstone'], [/malachite/i, 'malachite'],
 ];
 
 /** Our product types, against the Amazon product type that fits them. */
 const PRODUCT_TYPES = {
   Ring: 'FINERING',
+  Rings: 'FINERING',
+  Necklaces: 'FINENECKLACEBRACELETANKLET',
+  Bracelets: 'FINENECKLACEBRACELETANKLET',
+  Charm: 'FINENECKLACEBRACELETANKLET',
+  'Charm Pendant': 'FINENECKLACEBRACELETANKLET',
+  'Hoop Earring': 'FINEEARRING',
+  'Hoop Earrings': 'FINEEARRING',
+  'Ear Studs': 'FINEEARRING',
+  Anklet: 'FINENECKLACEBRACELETANKLET',
   Earring: 'FINEEARRING',
   Earrings: 'FINEEARRING',
   Necklace: 'FINENECKLACEBRACELETANKLET',
@@ -68,7 +85,8 @@ function metalOf(raw) {
 
 function stoneOf(raw) {
   const s = String(raw || '').trim();
-  if (!s || /^n\/?a$/i.test(s)) return null;      // a plain metal piece, not a failure
+  // Several ways of saying "there is no stone". None of them is an unknown gem.
+  if (!s || /^n\/?a$/i.test(s) || /^no\s*gem|^none$|^not\s*available$|^nil$/i.test(s)) return null;
   const hit = match(STONES, s);
   return hit ? hit[1] : null;
 }
