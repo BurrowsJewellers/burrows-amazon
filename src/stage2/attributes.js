@@ -51,29 +51,64 @@ const STONES = [
   [/moonstone/i, 'moonstone'], [/malachite/i, 'malachite'],
 ];
 
-/** Our product types, against the Amazon product type that fits them. */
+/**
+ * Our product types, against the Amazon product type that fits them.
+ *
+ * These are the specific types — NECKLACE rather than FINENECKLACEBRACELETANKLET —
+ * and that distinction is the whole reason Stage 2's first attempt produced 1,186
+ * listings nobody could buy. Submitting under a FINE type is accepted, and Amazon then
+ * quietly reclassifies the listing to the specific one, which asks for a good deal more
+ * than the FINE type did. The listing is then incomplete for the type it has actually
+ * become, so no offer is ever created — and Amazon reports the reclassification as a
+ * warning rather than an error, so nothing looks wrong.
+ *
+ * Submitting under the type Amazon was going to choose anyway avoids all of it.
+ */
 const PRODUCT_TYPES = {
-  Ring: 'FINERING',
-  Rings: 'FINERING',
-  Necklaces: 'FINENECKLACEBRACELETANKLET',
-  Bracelets: 'FINENECKLACEBRACELETANKLET',
-  Charm: 'FINENECKLACEBRACELETANKLET',
-  'Charm Pendant': 'FINENECKLACEBRACELETANKLET',
-  'Hoop Earring': 'FINEEARRING',
-  'Hoop Earrings': 'FINEEARRING',
-  'Ear Studs': 'FINEEARRING',
-  Anklet: 'FINENECKLACEBRACELETANKLET',
+  Ring: 'RING',
+  Rings: 'RING',
+  Earring: 'EARRING',
+  Earrings: 'EARRING',
+  'Hoop Earring': 'EARRING',
+  'Hoop Earrings': 'EARRING',
+  'Ear Studs': 'EARRING',
+  Necklace: 'NECKLACE',
+  Necklaces: 'NECKLACE',
+  Necklet: 'NECKLACE',
+  Chain: 'NECKLACE',
+  Pendant: 'NECKLACE',
+  'Charm Pendant': 'NECKLACE',
+  Bracelet: 'BRACELET',
+  Bracelets: 'BRACELET',
+  Bangle: 'BRACELET',
+  Anklet: 'BRACELET',
+  Charm: 'CHARM',
   Watch: 'WATCH',
   Watches: 'WATCH',
-  Earring: 'FINEEARRING',
-  Earrings: 'FINEEARRING',
-  Necklace: 'FINENECKLACEBRACELETANKLET',
-  Necklet: 'FINENECKLACEBRACELETANKLET',
-  Chain: 'FINENECKLACEBRACELETANKLET',
-  Pendant: 'FINENECKLACEBRACELETANKLET',
-  Bracelet: 'FINENECKLACEBRACELETANKLET',
-  Bangle: 'FINENECKLACEBRACELETANKLET',
 };
+
+/**
+ * The specific types spell their values as a person would — "Sterling Silver", not
+ * "sterling_silver" — so the vocabulary the FINE types used has to be translated.
+ */
+/** Precious metals make a piece fine jewellery in Amazon's sense; the rest is fashion. */
+const FINE_METALS = new Set([
+  'yellow_gold', 'white_gold', 'rose_gold', 'gold', 'sterling_silver', 'platinum',
+]);
+
+const AMAZON_METAL = {
+  yellow_gold: 'Yellow Gold', white_gold: 'White Gold', rose_gold: 'Rose Gold',
+  gold: 'Gold', gold_plated: 'Gold Plated', sterling_silver: 'Sterling Silver',
+  silver: 'Silver', platinum: 'Platinum', titanium: 'Titanium',
+  stainless_steel: 'Stainless Steel', ceramic: 'Ceramic', brass: 'Brass',
+  alloy: 'Alloy', leather: 'Leather',
+};
+
+/** Stones likewise: Amazon's specific types capitalise them. */
+const titleCase = (v) => String(v || '')
+  .split(/[\s_]+/).filter(Boolean)
+  .map((w) => w[0].toUpperCase() + w.slice(1).toLowerCase())
+  .join(' ');
 
 const match = (table, text) => table.find(([re]) => re.test(String(text || '')));
 
@@ -127,7 +162,7 @@ function buildListing(row, { marketplaceId, exemption = true }) {
 
   // A ring without a size cannot be sold as a ring.
   let usSize = null;
-  if (productType === 'FINERING') {
+  if (productType === 'RING') {
     const sized = toAmazonSize(row.ring_size);
     if (!sized.us) missing.push(sized.why);
     usSize = sized.us;
@@ -144,11 +179,17 @@ function buildListing(row, { marketplaceId, exemption = true }) {
 
   // Same as the metal: where our record is silent, the title may not be. Only the
   // title — the descriptions say the same thing for every product of a brand.
+  // Same as the metal: where our record is silent, the title may not be. Only the
+  // title — the descriptions say the same thing for every product of a brand.
   let stone = stoneOf(row.stone);
   if (!stone && !row.stone) {
     const fromTitle = stoneFrom(String(row.title || ''));
     if (fromTitle) stone = stoneOf(fromTitle.value);
   }
+
+  const metalName = AMAZON_METAL[metal.type] || titleCase(metal.type);
+  const gem = stone ? titleCase(stone) : 'No Gemstone';
+
   const attributes = {
     brand: [{ ...L, value: row.vendor }],
     item_name: [{ ...L, value: row.title.slice(0, 190) }],
@@ -161,40 +202,80 @@ function buildListing(row, { marketplaceId, exemption = true }) {
     supplier_declared_dg_hz_regulation: [{ ...m, value: 'not_applicable' }],
     condition_type: [{ ...m, value: 'new_new' }],
     part_number: [{ ...m, value: row.sku }],
-    material: [{ ...L, value: metalSource || metal.type.replace(/_/g, ' ') }],
-    department: [{ ...L, value: 'womens' }],
-    color: [{ ...L, value: row.colour || metalSource || metal.type.replace(/_/g, ' ') }],
-    metal_type: [{ ...L, value: metal.type }],
-    metals: [{ ...m, id: 1, metal_type: val(metal.type), metal_stamp: val(metal.stamp) }],
+
+    // The specific types ask for these and the FINE types did not, which is precisely
+    // why a listing accepted under a FINE type is incomplete once Amazon reclassifies
+    // it — and why 1,186 of them ended up with no offer against them.
+    department: [{ ...L, value: "Women's" }],
+    color: [{ ...L, value: row.colour || metalName }],
+    jewelry_material_categorization: [{ ...L, value: FINE_METALS.has(metal.type) ? 'fine' : 'fashion' }],
+
+    material: [{ ...L, value: metalName }],
+    metal_type: [{ ...L, value: metalName }],
+    metals: [{ ...m, id: 1, metal_type: val(metalName),
+               metal_stamp: val(metal.stamp || metalName) }],
+    gem_type: [{ ...L, value: gem }],
+    stones: [{ ...m, id: 1, type: val(gem),
+               creation_method: val('Natural'), treatment_method: val('Not Enhanced') }],
+
     main_product_image_locator: [{ ...m, media_location: row.image_url }],
     purchasable_offer: [{ ...m, currency: 'AUD',
       our_price: [{ schedule: [{ value_with_tax: Number(row.price) }] }] }],
     fulfillment_availability: [{ fulfillment_channel_code: 'DEFAULT',
-      quantity: Math.max(0, Number(row.qty) || 0), lead_time_to_ship_max_days: 5 }],
+      quantity: Math.max(0, Number(row.qty) || 0) }],
   };
 
-  // Our own pieces have never had a barcode issued for them. The exemption is the
-  // route Amazon provides for exactly that, and it has to be claimed explicitly.
+  // Our own pieces have never had a barcode issued for them. The exemption is the route
+  // Amazon provides for exactly that, and it has to be claimed explicitly.
   if (exemption) {
     attributes.supplier_declared_has_product_identifier_exemption = [{ ...m, value: true }];
   }
 
-  // These are required whether or not the piece has a stone, and Amazon provides the
-  // value for when it does not.
-  const gem = stone || 'No Gemstone';
-  attributes.gem_type = [{ ...L, value: gem }];
-  attributes.stones = [{ ...m, id: 1, type: val(gem),
-    creation_method: val('natural'), treatment_method: val('not_enhanced') }];
-
   if (usSize) {
     attributes.ring = [{ ...m,
       size: [val(usSize)], sizing_lower_range: [val(usSize)], sizing_upper_range: [val(usSize)] }];
+    attributes.size = [{ ...L, value: usSize }];
     attributes.is_resizable = [{ ...m, value: true }];
   } else {
     // Chains, bracelets and bangles are sized by length. Where we hold one, say it;
     // where we do not, Amazon's own guidance for an item that does not vary by size is
     // exactly this phrase.
     attributes.size = [{ ...L, value: row.length ? String(row.length).trim() : 'One Size' }];
+
+    // A length written as "45cm" is a number and a unit, and Amazon wants them apart.
+    // Given as one string it asks for the unit it cannot see, which is what blocked
+    // every chain and bracelet we tried.
+    const measured = String(row.length || '').match(/([\d.]+)\s*(cm|mm|m|in|inch|inches|")?/i);
+    if (measured && Number(measured[1]) > 0) {
+      const u = (measured[2] || 'cm').toLowerCase();
+      const unit = /^mm$/.test(u) ? 'millimeters'
+                 : /^m$/.test(u) ? 'meters'
+                 : /^(in|inch|inches|")$/.test(u) ? 'inches'
+                 : 'centimeters';
+      const value = Number(measured[1]);
+      attributes.chain_length = [{ ...m, decimal_value: value, unit }];
+      // Bracelets are asked for their length end to end. Note item_length, not
+      // item_dimensions: that one wants width and height as well, which we do not hold,
+      // so offering it a partial answer makes matters worse rather than better.
+      attributes.item_length = [{ ...m, value, unit }];
+    }
+  }
+
+  // A necklace or bracelet has to say how it fastens, and ours is recorded nowhere. A
+  // lobster clasp is what most of what we sell uses, so it is stated — and marked as a
+  // guess rather than passed off as known.
+  if (productType === 'NECKLACE' || productType === 'BRACELET') {
+    attributes.clasp_type = [{ ...L, value: 'Lobster' }];
+    assumed.push('clasp_type');
+  }
+
+  // Amazon asks how many pearls and what shape they are the moment a pearl is named.
+  // Our records say neither. One round pearl is what a pendant or a pair of studs
+  // almost always is, and both are marked as guesses.
+  if (/pearl/i.test(gem)) {
+    attributes.number_of_pearls = [{ ...m, value: 1 }];
+    attributes.stones[0].shape = val('Round');
+    assumed.push('number_of_pearls', 'pearl_shape');
   }
 
   // Up to eight more photographs, which is what Amazon accepts.
