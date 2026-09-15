@@ -76,8 +76,8 @@ const UPSERT = [
   'insert into amazon_own_brand',
   ' (sku, vendor, title, description, price, qty, product_type, amazon_type, metal, stone,',
   '  colour, ring_size, us_ring_size, image_url, image_count, state, state_reason, issues,',
-  '  validated_at, listed_at)',
-  'values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, now(),',
+  '  assumed, validated_at, listed_at)',
+  'values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, now(),',
   "        case when $16 = 'listed' then now() else null end)",
   'on conflict (sku) do update set',
   ' vendor = excluded.vendor, title = excluded.title, description = excluded.description,',
@@ -86,7 +86,8 @@ const UPSERT = [
   ' colour = excluded.colour, ring_size = excluded.ring_size,',
   ' us_ring_size = excluded.us_ring_size, image_url = excluded.image_url,',
   ' image_count = excluded.image_count, state = excluded.state,',
-  ' state_reason = excluded.state_reason, issues = excluded.issues, validated_at = now(),',
+  ' state_reason = excluded.state_reason, issues = excluded.issues,',
+  ' assumed = excluded.assumed, validated_at = now(),',
   ' listed_at = coalesce(amazon_own_brand.listed_at, excluded.listed_at), updated_at = now()',
 ].join('\n');
 
@@ -95,13 +96,13 @@ async function record(row, built, state, reason, issues) {
     row.sku, row.vendor, row.title, row.description, row.price, row.qty,
     row.product_type, built.productType || null, row.metal, row.stone, row.colour,
     row.ring_size, row.us_ring_size || null, row.image_url, row.image_count || 0,
-    state, reason, issues ? JSON.stringify(issues) : null,
+    state, reason, issues ? JSON.stringify(issues) : null, row.assumed || null,
   ]);
 }
 
 const SELECT = [
   'select a.sku, a.vendor, a.our_title as title, a.our_price as price, a.qty,',
-  '       p.product_type, p.handle,',
+  '       p.product_type, p.handle, p.tags,',
   '       r.s_metal_type as metal, r.s_stone_type as stone,',
   '       r.metal_colour as colour, r.ring_size, r.bracelet_length as length,',
   '       a.barcode,',
@@ -145,6 +146,8 @@ async function main() {
   const counts = {};
   const bump = (k) => (counts[k] = (counts[k] || 0) + 1);
   const gaps = {};
+  const assumedTally = {};
+  const assumedFields = {};
   let done = 0;
 
   for (const row of rows) {
@@ -212,7 +215,7 @@ async function main() {
 
       if (!errs.length) {
         state = SUBMIT ? 'listed' : 'ready';
-      } else if (/different from what's already in the Amazon catalogue|already exists in the Amazon catalog/i.test(text)) {
+      } else if (/different from what's already in the Amazon catalogue|already exists in the Amazon catalog|doesn't match the ASIN's product type|does not match the ASIN/i.test(text)) {
         // Amazon already carries this barcode. That makes it a Stage 1 offer, not a
         // page for us to author — and it means our own barcode lookup missed it, which
         // is worth knowing on its own.
@@ -224,6 +227,11 @@ async function main() {
       }
     }
 
+    if (built.assumed && built.assumed.length) {
+      row.assumed = built.assumed;
+      assumedTally[built.assumed.length] = (assumedTally[built.assumed.length] || 0) + 1;
+      for (const a of built.assumed) assumedFields[a] = (assumedFields[a] || 0) + 1;
+    }
     await record(row, built, state, reason, issues);
     bump(state);
 
@@ -233,6 +241,14 @@ async function main() {
   console.log('\nwhere each piece ended up:');
   for (const [k, n] of Object.entries(counts).sort((a, b) => b[1] - a[1])) {
     console.log('  ' + k.padEnd(11) + ' ' + n);
+  }
+  if (Object.keys(assumedFields).length) {
+    console.log('\nattributes we had to assume rather than read:');
+    for (const [f, n] of Object.entries(assumedFields).sort((a, b) => b[1] - a[1])) {
+      console.log('  ' + String(n).padStart(5) + '  ' + f);
+    }
+    console.log('  (these are guesses that are usually right — worth correcting in time,');
+    console.log('   and none of them changes which product the customer receives)');
   }
   if (Object.keys(gaps).length) {
     console.log('\nwhat our own data is missing:');

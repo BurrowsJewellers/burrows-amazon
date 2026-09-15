@@ -34,21 +34,30 @@ async function photosFor(handle) {
   }
 }
 
-/** Amazon's refusals, boiled down to the question we are actually asking. */
+/**
+ * Amazon's refusals, boiled down to the question we are actually asking.
+ *
+ * The distinction that matters most is between "we may not author this brand" and
+ * "Amazon already has this barcode" — the second is not a refusal at all, it is a
+ * Stage 1 offer our own catalogue match failed to find.
+ */
 function verdictOf(errors) {
   const text = errors.map((e) => e.message).join(' ');
+  if (!errors.length) return { verdict: 'WOULD ACCEPT', detail: 'Amazon raised nothing' };
+  if (/already in the Amazon catalogue|already exists in the Amazon catalog|not match the ASIN|doesn't match the ASIN|may not change the brand name on this ASIN/i.test(text)) {
+    return { verdict: 'ALREADY LISTED', detail: 'Amazon has this barcode — it is a Stage 1 offer we missed' };
+  }
   if (/may not create new ASINs|connect your brand|not been approved by Amazon|Request Approval/i.test(text)) {
     return { verdict: 'BRAND REFUSED', detail: 'Amazon will not let us author a page for this brand' };
   }
-  if (!errors.length) return { verdict: 'WOULD ACCEPT', detail: 'Amazon raised nothing' };
-  return { verdict: 'data gaps only', detail: errors.map((e) => e.message).join(' | ').slice(0, 150) };
+  return { verdict: 'data gaps only', detail: text.slice(0, 150) };
 }
 
 async function main() {
   const { rows } = await db.query(`
     select distinct on (a.vendor)
            a.vendor, a.sku, a.barcode, a.our_title as title, a.our_price as price, a.qty,
-           p.product_type, p.handle,
+           p.product_type, p.handle, p.tags,
            r.s_metal_type as metal, r.s_stone_type as stone, r.metal_colour as colour,
            r.ring_size, r.bracelet_length as length, r.marketing_description as description,
            (select count(*)::int from amazon_listings x
@@ -60,7 +69,9 @@ async function main() {
     where a.state = 'no_match' and a.qty > 0
       and lower(a.vendor) not in ('burrows collection','burrows jewellers')
       and p.media_count > 0
-      and p.product_type in ('Ring','Earring','Necklace','Bracelet','Pendant','Chain','Bangle')
+      and p.product_type in ('Ring','Rings','Earring','Earrings','Necklace','Necklaces',
+                             'Bracelet','Bracelets','Pendant','Chain','Bangle','Watch','Watches',
+                             'Charm','Charm Pendant','Hoop Earring','Hoop Earrings','Ear Studs')
     order by a.vendor, a.our_price desc`);
 
   console.log(`testing ${rows.length} brands, one piece each — validation only, nothing is created\n`);
@@ -109,10 +120,16 @@ async function main() {
     if (r.verdict !== 'BRAND REFUSED') console.log(`${' '.repeat(30)} ${r.detail}`);
   }
 
-  const refused = results.filter((r) => r.verdict === 'BRAND REFUSED');
-  const open = results.filter((r) => r.verdict === 'WOULD ACCEPT');
-  console.log(`\n${refused.length} brands refused outright, covering ${refused.reduce((t, r) => t + r.total, 0)} products`);
-  console.log(`${open.length} brands Amazon raised no objection to, covering ${open.reduce((t, r) => t + r.total, 0)} products`);
+  const tally = {};
+  for (const r of results) {
+    tally[r.verdict] = tally[r.verdict] || { brands: 0, products: 0 };
+    tally[r.verdict].brands++;
+    tally[r.verdict].products += r.total;
+  }
+  console.log('\nsummary:');
+  for (const [v, t] of Object.entries(tally).sort((a, b) => b[1].products - a[1].products)) {
+    console.log(`  ${String(t.products).padStart(5)} products across ${String(t.brands).padStart(2)} brands — ${v}`);
+  }
   await db.pool.end();
 }
 

@@ -11,6 +11,7 @@
  * listed with a plausible guess in the gap.
  */
 const { toAmazonSize } = require('./ringsize');
+const { metalFrom, stoneFrom, watchAttributes } = require('./extract');
 
 /** Amazon's metal vocabulary, against the way Retail Edge writes it. */
 const METALS = [
@@ -62,6 +63,8 @@ const PRODUCT_TYPES = {
   'Hoop Earrings': 'FINEEARRING',
   'Ear Studs': 'FINEEARRING',
   Anklet: 'FINENECKLACEBRACELETANKLET',
+  Watch: 'WATCH',
+  Watches: 'WATCH',
   Earring: 'FINEEARRING',
   Earrings: 'FINEEARRING',
   Necklace: 'FINENECKLACEBRACELETANKLET',
@@ -100,12 +103,23 @@ function buildListing(row, { marketplaceId, exemption = true }) {
   const L = { marketplace_id: marketplaceId, language_tag: 'en_AU' };
   const val = (v) => ({ language_tag: 'en_AU', value: v });
   const missing = [];
+  const assumed = [];
 
   const productType = PRODUCT_TYPES[row.product_type];
   if (!productType) missing.push(`we have no Amazon category for "${row.product_type || 'no type'}"`);
 
-  const metal = metalOf(row.metal);
-  if (!metal) missing.push(`metal "${row.metal || 'none recorded'}" is not one Amazon recognises`);
+  // Dropship stock is not in Retail Edge, so its metal has to come out of the title.
+  // That is reading what we already hold, not inventing it — but only from the title:
+  // the descriptions are brand boilerplate and would answer for every product alike.
+  let metalSource = row.metal;
+  if (!metalOf(metalSource)) {
+    const fromTitle = metalFrom(String(row.title || ''));
+    if (fromTitle) metalSource = fromTitle.value;
+  }
+  const metal = metalOf(metalSource);
+  if (!metal && productType !== 'WATCH') {
+    missing.push(`metal "${row.metal || 'none recorded'}" is not one Amazon recognises, and the title does not say`);
+  }
 
   if (!row.image_url) missing.push('no photograph');
   if (!(Number(row.price) > 0)) missing.push('no price');
@@ -121,7 +135,20 @@ function buildListing(row, { marketplaceId, exemption = true }) {
 
   if (missing.length) return { ok: false, missing };
 
-  const stone = stoneOf(row.stone);
+  // A watch is a different object with a different vocabulary — no metals array, no
+  // stones, no ring size, and several fields Amazon asks for that only a title can
+  // answer. Built separately rather than bent into the jewellery shape.
+  if (productType === 'WATCH') {
+    return buildWatch(row, { marketplaceId, m, L, exemption });
+  }
+
+  // Same as the metal: where our record is silent, the title may not be. Only the
+  // title — the descriptions say the same thing for every product of a brand.
+  let stone = stoneOf(row.stone);
+  if (!stone && !row.stone) {
+    const fromTitle = stoneFrom(String(row.title || ''));
+    if (fromTitle) stone = stoneOf(fromTitle.value);
+  }
   const attributes = {
     brand: [{ ...L, value: row.vendor }],
     item_name: [{ ...L, value: row.title.slice(0, 190) }],
@@ -174,7 +201,51 @@ function buildListing(row, { marketplaceId, exemption = true }) {
     attributes[`other_product_image_locator_${i + 1}`] = [{ ...m, media_location: url }];
   });
 
-  return { ok: true, productType, body: { productType, requirements: 'LISTING', attributes } };
+  return { ok: true, productType, assumed, body: { productType, requirements: 'LISTING', attributes } };
+}
+
+/**
+ * A watch listing.
+ *
+ * Amazon insists on a handful of details our records simply do not carry — the case
+ * shape and the calendar complication among them. Where the title says, we use what it
+ * says; where it does not, we use the value that is right for most of what we stock and
+ * record that we assumed it, so the guesses are countable and correctable rather than
+ * indistinguishable from fact.
+ */
+function buildWatch(row, { m, L, exemption }) {
+  const { picks, assumed } = watchAttributes({ title: row.title, tags: row.tags });
+  const attributes = {
+    brand: [{ ...L, value: row.vendor }],
+    manufacturer: [{ ...L, value: row.vendor }],
+    item_name: [{ ...L, value: String(row.title).slice(0, 190) }],
+    product_description: [{ ...L, value: String(row.title).slice(0, 1900) }],
+    bullet_point: [{ ...L, value: String(row.title).slice(0, 190) }],
+    country_of_origin: [{ ...m, value: 'CN' }],
+    supplier_declared_dg_hz_regulation: [{ ...m, value: 'not_applicable' }],
+    condition_type: [{ ...m, value: 'new_new' }],
+    part_number: [{ ...m, value: row.sku }],
+    target_gender: [{ ...L, value: picks.target_gender.value }],
+    department: [{ ...L, value: picks.department.value }],
+    item_shape: [{ ...L, value: picks.item_shape.value }],
+    calendar_type: [{ ...L, value: picks.calendar_type.value }],
+    color: [{ ...L, value: picks.color.value }],
+    warranty_type: [{ ...L, value: picks.warranty_type.value }],
+    list_price: [{ ...m, currency: 'AUD', value_with_tax: Number(row.price) }],
+    main_product_image_locator: [{ ...m, media_location: row.image_url }],
+    purchasable_offer: [{ ...m, currency: 'AUD',
+      our_price: [{ schedule: [{ value_with_tax: Number(row.price) }] }] }],
+    fulfillment_availability: [{ fulfillment_channel_code: 'DEFAULT',
+      quantity: Math.max(0, Number(row.qty) || 0), lead_time_to_ship_max_days: 5 }],
+  };
+  if (exemption) {
+    attributes.supplier_declared_has_product_identifier_exemption = [{ ...m, value: true }];
+  }
+  (row.extra_images || []).slice(0, 8).forEach((url, i) => {
+    attributes[`other_product_image_locator_${i + 1}`] = [{ ...m, media_location: url }];
+  });
+  return { ok: true, productType: 'WATCH', assumed,
+           body: { productType: 'WATCH', requirements: 'LISTING', attributes } };
 }
 
 module.exports = { buildListing, metalOf, stoneOf, PRODUCT_TYPES };

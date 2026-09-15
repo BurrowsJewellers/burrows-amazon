@@ -126,6 +126,7 @@ create table if not exists amazon_own_brand (
   --   listed     created on Amazon
   state_reason   text,
   issues         jsonb,
+  assumed        text[],                    -- attributes guessed rather than read
   validated_at   timestamptz,
   listed_at      timestamptz,
   created_at     timestamptz not null default now(),
@@ -133,3 +134,8 @@ create table if not exists amazon_own_brand (
 );
 
 create index if not exists amazon_own_brand_state_idx on amazon_own_brand (state);
+
+-- Which attributes were guessed rather than read from our own records. Added after the
+-- table existed, so it needs its own alter: "create table if not exists" skips a table
+-- that is already there, column list and all.
+alter table amazon_own_brand add column if not exists assumed text[];
