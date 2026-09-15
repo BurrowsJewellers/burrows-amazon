@@ -18,6 +18,7 @@ const db = require('../src/db');
 const config = require('../src/config');
 const { setQuantity, readResult } = require('../src/amazon/listings');
 const { fetchBySku, quantityOf } = require('../src/amazon/inventory');
+const { soldSince } = require('../src/amazon/orders');
 const { checkBrand } = require('../src/rules/brands');
 
 const DRY = process.argv.includes('--dry-run');
@@ -50,10 +51,25 @@ async function main() {
   // being watched — and the single pieces this protects are the tail of the catalogue.
   const onAmazon = await fetchBySku(rows.map((r) => r.sku), 'fulfillmentAvailability');
 
+  // What has sold on Amazon recently, so a sale can be told apart from Amazon simply
+  // holding a lower number. Fourteen days is comfortably longer than it takes the shop
+  // to record a sale in Retail Edge, which is the gap this exists to cover.
+  let sold = new Map();
+  try {
+    sold = await soldSince(new Date(Date.now() - 14 * 86400000));
+  } catch (err) {
+    // Without this we cannot safely raise a quantity, so say so rather than carry on
+    // and quietly put sold stock back on sale.
+    console.log('could not read recent orders: ' + String(err.message).slice(0, 140));
+    console.log('refusing to raise any quantity this run — a sold item must not come back.');
+    sold = null;
+  }
+
   // Compare the store against Amazon itself. A SKU Amazon has not finished setting up
   // reports null rather than zero, and is left alone — re-sending a quantity it has not
   // processed yet only adds to the queue it is already working through.
   const needsChange = [];
+  const heldBack = [];
   let settling = 0;
   let notOnAmazon = 0;
   for (const row of rows) {
@@ -70,9 +86,29 @@ async function main() {
     const weWouldList = row.state === 'listed' || row.state === 'ready';
     const want = weWouldList ? Math.max(0, row.live_qty) : 0;
 
-    if (amazonQty !== want) {
-      needsChange.push({ ...row, amazon_qty: amazonQty, want, withdrawn: !weWouldList });
+    if (amazonQty === want) continue;
+
+    // Raising a quantity is the only direction that can do harm, and there is one case
+    // where it does real harm: Amazon takes stock down the moment something sells, and
+    // the shop records that sale in Retail Edge some time later. In between, our figure
+    // still shows the item in stock, and putting Amazon back up to it offers a piece
+    // that is already sold and, for a one-off, already gone.
+    //
+    // The tell is that our own figure has not moved since we last sent it. If the shop
+    // had recorded the sale our number would be lower; if we had genuinely restocked it
+    // would be higher. Unchanged means the drop is Amazon's and we have not caught up.
+    if (want > amazonQty) {
+      if (!sold) { heldBack.push({ ...row, amazon_qty: amazonQty, want, why: 'recent orders unavailable' }); continue; }
+      const sale = sold.get(row.sku);
+      const ourFigureUnmoved = Number(row.live_qty) === Number(row.sent_qty);
+      if (sale && sale.units >= want - amazonQty && ourFigureUnmoved) {
+        heldBack.push({ ...row, amazon_qty: amazonQty, want,
+          why: `sold ${sale.units} on Amazon (${sale.orders[0]}) and the shop has not recorded it yet` });
+        continue;
+      }
     }
+
+    needsChange.push({ ...row, amazon_qty: amazonQty, want, withdrawn: !weWouldList });
   }
 
   // Sold out first, and in stock afterwards. If the run is interrupted half way, the
@@ -89,6 +125,13 @@ async function main() {
   console.log(`  ${restock.length} have a quantity on Amazon that is not what we hold`);
   console.log(`  ${settling} are still being set up by Amazon and were left alone`);
   if (notOnAmazon) console.log(`  ${notOnAmazon} are not on Amazon at all`);
+  if (heldBack.length) {
+    console.log(`\n  ${heldBack.length} left alone rather than put back on sale:`);
+    for (const h of heldBack.slice(0, 10)) {
+      console.log(`    ${h.sku.padEnd(14)} Amazon has ${h.amazon_qty}, we still say ${h.want} — ${h.why}`);
+    }
+    console.log('    These correct themselves once the sale is recorded in Retail Edge.');
+  }
   if (!queue.length) {
     console.log('\nNothing to change. Amazon matches what we hold.');
     await db.query(`update amazon_runs set finished_at = now() where id = $1`, [runId]);
