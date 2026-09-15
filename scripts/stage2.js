@@ -59,18 +59,28 @@ const OWN_BRANDS = ['burrows collection', 'burrows jewellers'];
  * that can expire without anyone noticing.
  */
 async function photosFor(handle) {
-  try {
-    const res = await fetch('https://burrows-jewellers.myshopify.com/products/' + handle + '.js');
-    if (!res.ok) return { images: [], description: '' };
-    const j = await res.json();
-    const images = (j.images || []).map((u) => (u.startsWith('//') ? 'https:' + u : u));
-    const description = String(j.description || '')
-      .replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-    return { images, description };
-  } catch (err) {
-    return { images: [], description: '' };
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch('https://burrows-jewellers.myshopify.com/products/' + handle + '.js');
+      if (res.status === 404) return { images: [], description: '', reached: true };
+      if (!res.ok) { lastError = 'HTTP ' + res.status; await sleep(500 * (attempt + 1)); continue; }
+      const j = await res.json();
+      const images = (j.images || []).map((u) => (u.startsWith('//') ? 'https:' + u : u));
+      const description = String(j.description || '')
+        .replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      return { images, description, reached: true };
+    } catch (err) {
+      lastError = String(err.message).slice(0, 80);
+      await sleep(500 * (attempt + 1));
+    }
   }
+  // Could not reach the shop. That is not the same as the product having no photograph,
+  // and must not be recorded as though it were — see the caller.
+  return { images: [], description: '', reached: false, error: lastError };
 }
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const UPSERT = [
   'insert into amazon_own_brand',
@@ -161,6 +171,17 @@ async function main() {
 
   for (const row of rows) {
     const photos = await photosFor(row.handle);
+
+    // A shop we could not reach says nothing about the product. Recording that as "no
+    // photograph" is a permanent-sounding verdict for a temporary failure — it marked
+    // 544 products unlistable on the first run, every one of which had photographs all
+    // along. Left as draft so the next run picks it up.
+    if (!photos.reached) {
+      await record(row, {}, 'draft', 'could not reach the shop for its photographs: ' + photos.error, null);
+      bump('shop unreachable, will retry');
+      continue;
+    }
+
     row.image_url = photos.images[0] || null;
     row.extra_images = photos.images.slice(1);
     row.image_count = photos.images.length;
