@@ -139,3 +139,49 @@ create index if not exists amazon_own_brand_state_idx on amazon_own_brand (state
 -- table existed, so it needs its own alter: "create table if not exists" skips a table
 -- that is already there, column list and all.
 alter table amazon_own_brand add column if not exists assumed text[];
+
+-- Amazon orders, and what became of them in Shopify.
+--
+-- The Amazon order id is the primary key, which is what makes this safe to run every
+-- few minutes: an order already carried across cannot be carried across twice.
+create table if not exists amazon_orders (
+  amazon_order_id   text primary key,
+  purchase_date     timestamptz,
+  order_status      text,                     -- Amazon's: Unshipped, Shipped, Canceled…
+  fulfilment        text,                     -- MFN (we ship) or AFN (Amazon ships)
+  order_total       numeric(10,2),
+  currency          text,
+  ship_city         text,
+  ship_state        text,
+  ship_postcode     text,
+  ship_country      text,
+  has_full_address  boolean not null default false,
+  shopify_order_id  bigint,
+  shopify_order_name text,
+  state             text not null default 'seen',
+  --   seen     read from Amazon, nothing done with it yet
+  --   ready    every line maps to a product; waiting only on permission to write
+  --   created  a Shopify order exists for it
+  --   held     something about it needs a person — an unmapped line, usually
+  --   ignored  cancelled, or fulfilled by Amazon, so not ours to push
+  state_reason      text,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now()
+);
+
+create table if not exists amazon_order_items (
+  id                bigserial primary key,
+  amazon_order_id   text not null references amazon_orders (amazon_order_id) on delete cascade,
+  order_item_id     text,
+  sku               text,
+  asin              text,
+  title             text,
+  quantity          integer,
+  item_price        numeric(10,2),
+  shopify_variant_id bigint,                  -- null means we could not place the line
+  created_at        timestamptz not null default now()
+);
+
+create unique index if not exists amazon_order_items_line_idx
+  on amazon_order_items (amazon_order_id, order_item_id);
+create index if not exists amazon_orders_state_idx on amazon_orders (state);

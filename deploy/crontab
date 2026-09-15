@@ -16,3 +16,8 @@
 
 # Reads Amazon back and records what it is unhappy about.
 */30 * * * *  /opt/burrows-amazon/run.sh health   >> /var/log/burrows-amazon-health.log 2>&1
+
+# Reads Amazon orders and records them. It cannot create the Shopify order until the
+# store grants write_orders, so for now this is visibility — and the moment that scope
+# is granted, adding --submit is the whole change.
+*/10 * * * *  /opt/burrows-amazon/run.sh orders    >> /var/log/burrows-amazon-orders.log 2>&1
