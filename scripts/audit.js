@@ -19,6 +19,7 @@ const fs = require('fs');
 const db = require('../src/db');
 const { enumerateAll, statusOf, quantityOf } = require('../src/amazon/inventory');
 const { checkBrand } = require('../src/rules/brands');
+const ours_ = require('../src/ours');
 
 const OUT = process.argv.find((a) => a.startsWith('--out='))?.split('=')[1] || '/tmp/amazon-strays.txt';
 
@@ -37,9 +38,10 @@ async function main() {
     console.log('');
   }
 
-  const ours = new Map(
-    (await db.query('select sku, vendor, state from amazon_listings')).rows.map((r) => [r.sku, r])
-  );
+  // Both routes. Reading only amazon_listings would call every page Stage 2 authored a
+  // stray — they are on Amazon and would not be in the table — and this is the report a
+  // removal works from.
+  const ours = await ours_.records();
   const conflicts = new Set((await db.query('select sku from amazon_conflicts')).rows.map((r) => r.sku));
 
   const strays = [];
@@ -54,7 +56,7 @@ async function main() {
     if (!mine) why = 'not in our records — listed by something other than this system';
     else if (!checkBrand({ vendor: mine.vendor }).allowed) why = `BANNED BRAND (${mine.vendor})`;
     else if (conflicts.has(sku)) why = 'barcode conflict — points at a different product';
-    else if (mine.state !== 'listed' && mine.state !== 'ready') why = `we do not intend to list this (${mine.state})`;
+    else if (!['listed', 'ready'].includes(mine.state)) why = `we do not intend to list this (${mine.state})`;
 
     if (why) {
       strays.push({ sku, why, onSale, status: statusOf(item).join(',') });

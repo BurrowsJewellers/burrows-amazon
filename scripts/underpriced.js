@@ -15,6 +15,7 @@
 const fs = require('fs');
 const db = require('../src/db');
 const { fetchBySku, statusOf } = require('../src/amazon/inventory');
+const ours = require('../src/ours');
 
 const OUT = process.argv.find((a) => a.startsWith('--out='))?.split('=')[1] || '/tmp/underpriced.txt';
 const QUIET = process.argv.includes('--quiet');
@@ -23,8 +24,7 @@ async function main() {
   // Our own SKUs, not an enumeration of the account: the listings search stops at
   // 1,000 without saying so, and a listing selling below our price is exactly the
   // thing that must not fall off the end of a truncated list.
-  const { rows } = await db.query("select sku from amazon_listings where last_pushed_at is not null");
-  const listings = await fetchBySku(rows.map((r) => r.sku), 'summaries,offers,attributes');
+  const listings = await fetchBySku(await ours.skus(), 'summaries,offers,attributes');
   const under = [];
 
   for (const [sku, item] of listings) {

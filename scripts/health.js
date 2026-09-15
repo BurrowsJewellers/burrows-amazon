@@ -14,6 +14,7 @@
 const db = require('../src/db');
 const { explain } = require('../src/amazon/listings');
 const { fetchBySku } = require('../src/amazon/inventory');
+const ours = require('../src/ours');
 
 /**
  * Every listing we have sent, asked about by SKU.
@@ -24,9 +25,8 @@ const { fetchBySku } = require('../src/amazon/inventory');
  * which made every count this job reported an undercount.
  */
 async function liveListings() {
-  const { rows } = await db.query(
-    'select sku from amazon_listings where last_pushed_at is not null order by sku');
-  const found = await fetchBySku(rows.map((r) => r.sku), 'summaries,issues,offers,attributes');
+  const skus = await ours.skus();
+  const found = await fetchBySku(skus, 'summaries,issues,offers,attributes');
 
   const out = [];
   for (const [, item] of found) {
@@ -71,11 +71,21 @@ async function main() {
   // apart from "people can buy it" — they are not the same thing and the gap is where
   // the work is.
   for (const l of live) {
+    const status = l.status.join(',') || null;
+    // Whichever table owns the listing gets the answer. A Stage 2 page has a row in
+    // amazon_listings too — blocked, because it had no barcode to match on — so writing
+    // only there would file the status against a row that says we never listed it.
     await db.query(
       `update amazon_listings
           set listing_status = $2, buyable = $3, status_checked_at = now()
-        where sku = $1`,
-      [l.sku, l.status.join(',') || null, l.buyable]
+        where sku = $1 and last_pushed_at is not null`,
+      [l.sku, status, l.buyable]
+    );
+    await db.query(
+      `update amazon_own_brand
+          set listing_status = $2, buyable = $3, status_checked_at = now()
+        where sku = $1 and state = 'listed'`,
+      [l.sku, status, l.buyable]
     );
   }
 

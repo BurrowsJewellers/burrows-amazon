@@ -185,3 +185,8 @@ create table if not exists amazon_order_items (
 create unique index if not exists amazon_order_items_line_idx
   on amazon_order_items (amazon_order_id, order_item_id);
 create index if not exists amazon_orders_state_idx on amazon_orders (state);
+
+-- What Amazon is doing with a page we authored, same as for an offer we sent.
+alter table amazon_own_brand add column if not exists listing_status text;
+alter table amazon_own_brand add column if not exists buyable boolean;
+alter table amazon_own_brand add column if not exists status_checked_at timestamptz;
