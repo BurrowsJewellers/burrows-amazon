@@ -9,10 +9,11 @@
  */
 const db = require('../src/db');
 const { metalOf, stoneOf, PRODUCT_TYPES } = require('../src/stage2/attributes');
+const { metalFrom, stoneFrom } = require('../src/stage2/extract');
 
 async function main() {
   const { rows } = await db.query(`
-    select a.vendor, a.sku, a.our_price as price,
+    select a.vendor, a.sku, a.our_price as price, a.our_title as title,
            coalesce(r.s_metal_type,'') as metal,
            coalesce(r.s_stone_type,'') as stone,
            coalesce(p.product_type,'') as product_type
@@ -33,14 +34,20 @@ async function main() {
       typeGaps[r.product_type || '(none)'] = (typeGaps[r.product_type || '(none)'] || 0) + 1;
       blocked = true;
     }
-    if (!metalOf(r.metal)) {
-      const k = r.metal || '(nothing recorded)';
+    // Mirror what the pipeline does: where our record is silent, the title may not be.
+    // Watches carry no metal attribute at all, so they are not short of one.
+    const amazonType = PRODUCT_TYPES[r.product_type];
+    const metalKnown = metalOf(r.metal) || metalFrom(r.title) || amazonType === 'WATCH';
+    if (!metalKnown) {
+      const k = r.metal || '(nothing recorded, and the title does not say)';
       metalGaps[k] = metalGaps[k] || { n: 0, value: 0 };
       metalGaps[k].n++; metalGaps[k].value += Number(r.price) || 0;
       blocked = true;
     }
     // A stone we cannot name is only a problem when one is recorded at all.
-    if (r.stone && !/^n\/?a$/i.test(r.stone.trim()) && !stoneOf(r.stone)) {
+    const stoneKnown = stoneOf(r.stone) || stoneFrom(r.title) || !r.stone
+      || /^n\/?a$/i.test(r.stone.trim()) || /^no\s*gem|^none$|^not\s*available$/i.test(r.stone.trim());
+    if (!stoneKnown) {
       const k = r.stone;
       stoneGaps[k] = stoneGaps[k] || { n: 0, value: 0 };
       stoneGaps[k].n++; stoneGaps[k].value += Number(r.price) || 0;
