@@ -12,7 +12,7 @@
     "dev": "node --watch src/server.js",
     "migrate": "node scripts/migrate.js",
     "match": "node scripts/match.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/confidence.test.js test/orders.test.js test/stockrace.test.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
