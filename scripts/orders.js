@@ -29,6 +29,18 @@ const { shopifyOrderFor } = require('../src/shopify/order');
 const SUBMIT = process.argv.includes('--submit');
 const DAYS = Number(process.argv.find((a) => a.startsWith('--days='))?.split('=')[1] || 14);
 
+/**
+ * Orders placed before this date were fulfilled by hand: shipped from Seller Central
+ * and the stock taken off in Retail Edge by whoever packed them. Carrying one of those
+ * across now would take the stock off a second time and count the money twice, which
+ * is why the first attempt was refused by Shopify — it could not reserve stock that
+ * had already gone.
+ *
+ * There is deliberately no default. Guessing this wrong quietly corrupts stock and
+ * revenue, so it has to be stated.
+ */
+const FROM = process.env.AMAZON_ORDERS_FROM ? new Date(process.env.AMAZON_ORDERS_FROM) : null;
+
 /** Amazon ships these itself, so they are not ours to pick, pack or decrement. */
 const NOT_OURS = new Set(['AFN']);
 
@@ -59,6 +71,15 @@ async function main() {
 
   let canWrite = false;
   if (SUBMIT) {
+    if (!FROM || Number.isNaN(FROM.getTime())) {
+      console.log('AMAZON_ORDERS_FROM is not set, so there is no telling which orders were');
+      console.log('already fulfilled by hand. Set it to the date this sync takes over, e.g.');
+      console.log('  AMAZON_ORDERS_FROM=2026-09-15');
+      console.log('Anything placed before then is left alone. Refusing to write without it.\n');
+      await db.query('update amazon_runs set finished_at = now() where id = $1', [runId]);
+      await db.pool.end();
+      return;
+    }
     const granted = await shopify.scopes();
     canWrite = granted.includes('write_orders');
     if (!canWrite) {
@@ -90,6 +111,11 @@ async function main() {
 
     if (order.OrderStatus === 'Canceled') { state = 'ignored'; reason = 'cancelled on Amazon'; }
     else if (NOT_OURS.has(order.FulfillmentChannel)) { state = 'ignored'; reason = 'Amazon fulfils this one'; }
+    else if (FROM && new Date(order.PurchaseDate) < FROM) {
+      state = 'ignored';
+      reason = 'placed before this sync took over — it was fulfilled by hand, and importing '
+        + 'it now would take the stock off twice and count the money twice';
+    }
 
     const items = state === 'ignored' ? [] : await amazonOrderItems(id);
     const lines = [];
@@ -167,10 +193,18 @@ async function main() {
       console.log(`${id}  -> Shopify ${created.order.name}`);
       bump('carried across');
     } catch (err) {
+      // Shopify refusing to reserve stock means our own figure says there is none. For a
+      // live order that should not happen — the piece was in stock when it sold — so it
+      // points at the stock having already been taken off somewhere else.
+      const noStock = /Unable to reserve inventory/i.test(String(err.message));
+      const why = noStock
+        ? 'Shopify has no stock left to reserve — the sale looks to have been taken off '
+          + 'in Retail Edge already, so this order may have been handled by hand'
+        : String(err.message).slice(0, 300);
       await db.query(`update amazon_orders set state = 'held', state_reason = $2, updated_at = now()
-        where amazon_order_id = $1`, [id, String(err.message).slice(0, 300)]);
-      console.log(`${id}  failed: ${String(err.message).slice(0, 160)}`);
-      bump('failed');
+        where amazon_order_id = $1`, [id, why]);
+      console.log(`${id}  held: ${why.slice(0, 150)}`);
+      bump(noStock ? 'no stock to reserve' : 'failed');
     }
   }
 
