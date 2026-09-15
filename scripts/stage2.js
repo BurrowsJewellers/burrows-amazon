@@ -136,6 +136,10 @@ async function main() {
 
   const sql = SELECT +
     '\nwhere (' + brandFilter + ")\n  and a.qty > 0\n  and a.state in ('blocked','no_match')" +
+    // Never author a page for something Stage 1 has already sent. Those SKUs exist on
+    // Amazon as offers against someone else's page; writing a new page under the same
+    // SKU would fight with them.
+    '\n  and a.last_pushed_at is null' +
     skuFilter + '\norder by a.our_price desc' + (LIMIT ? '\nlimit ' + LIMIT : '');
 
   const { rows } = await db.query(sql, params);
