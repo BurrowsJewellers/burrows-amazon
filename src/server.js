@@ -49,13 +49,24 @@ app.get('/api/summary', async (req, res, next) => {
     // decides whether to show it later. A third group has been sent since the last
     // health pass and has no status yet — counted separately, because leaving it out
     // meant the figures on screen did not add up to the number we had sent.
+    // Both routes onto Amazon. Counting only the offers would show a smaller number
+    // than we have actually listed, and the pages Stage 2 authored are the ones a
+    // person is most likely to be looking for.
     const { rows: live } = await db.query(
-      `select count(*) filter (where buyable)::int              as buyable,
+      `with live as (
+         select buyable, listing_status, status_checked_at
+         from amazon_listings where state = 'listed' and last_pushed_at is not null
+         union all
+         select buyable, listing_status, status_checked_at
+         from amazon_own_brand where state = 'listed'
+       )
+       select count(*) filter (where buyable)::int              as buyable,
               count(*) filter (where listing_status is not null
                                  and not coalesce(buyable,false))::int as visible_only,
               count(*) filter (where listing_status is null)::int      as unchecked,
+              count(*)::int                                     as total,
               max(status_checked_at)                            as checked_at
-       from amazon_listings where state = 'listed'`
+       from live`
     );
     // Stage 2 readiness, so the tab carries a count like the others. The table only
     // exists once that pass has run, so a missing table is not an error here.
@@ -72,7 +83,7 @@ app.get('/api/summary', async (req, res, next) => {
       visibleNotBuyable: live[0].visible_only,
       notYetChecked: live[0].unchecked,
       statusCheckedAt: live[0].checked_at,
-      listed: by.listed || 0,
+      listed: live[0].total,
       review: by.review || 0,
       ready: by.ready || 0,
       noMatch: by.no_match || 0,
