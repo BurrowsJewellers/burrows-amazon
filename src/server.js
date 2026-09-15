@@ -57,8 +57,14 @@ app.get('/api/summary', async (req, res, next) => {
          select buyable, listing_status, status_checked_at
          from amazon_listings where state = 'listed' and last_pushed_at is not null
          union all
-         select buyable, listing_status, status_checked_at
-         from amazon_own_brand where state = 'listed'
+         select o.buyable, o.listing_status, o.status_checked_at
+         from amazon_own_brand o
+         where o.state = 'listed'
+           -- Excluded where Stage 1 already sent the SKU, so a listing is counted once.
+           -- Nothing produces that overlap today, because Stage 2 skips anything Stage 1
+           -- has sent — but the count must not depend on that staying true.
+           and not exists (select 1 from amazon_listings x
+                            where x.sku = o.sku and x.last_pushed_at is not null)
        )
        select count(*) filter (where buyable)::int              as buyable,
               count(*) filter (where listing_status is not null

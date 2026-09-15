@@ -11,7 +11,13 @@ router.get('/listings', async (req, res, next) => {
     const where = [];
     const params = [];
 
-    if (state) { params.push(state); where.push(`a.state = $${params.length}`); }
+    if (state) {
+      params.push(state);
+      where.push(`a.state = $${params.length}`);
+      // A row can say listed without having been sent. The tile counts what is on
+      // Amazon, so the tab must too.
+      if (state === 'listed') where.push('a.last_pushed_at is not null');
+    }
     if (vendor) { params.push(vendor); where.push(`a.vendor = $${params.length}`); }
     if (source) { params.push(source); where.push(`a.source = $${params.length}`); }
     if (q) {
@@ -22,8 +28,31 @@ router.get('/listings', async (req, res, next) => {
     params.push(Math.min(Number(limit) || 100, 500));
     params.push(Number(offset) || 0);
 
+    // "Live on Amazon" has to mean everything live, or the tab disagrees with the tile
+    // above it. Stage 2 pages live in their own table and are folded in here, shaped to
+    // the same columns — they have no barcode or matched ASIN by their nature, which is
+    // the whole reason they needed authoring rather than matching.
+    const ownBrand = state === 'listed'
+      ? `union all
+         select null::text as barcode, o.sku, o.vendor, o.title as our_title,
+                o.price as our_price, o.qty, 'S2'::char as source,
+                null::text as asin, null::text as amazon_title, 'listed' as state,
+                'we created this page ourselves' as state_reason,
+                null::text as confidence, null::text as match_note,
+                o.listed_at as last_pushed_at, o.listing_status, o.buyable,
+                o.status_checked_at,
+                (select e.plain from amazon_errors e
+                  where e.sku = o.sku and e.resolved_at is null
+                  order by e.created_at desc limit 1) as problem
+         from amazon_own_brand o
+         where o.state = 'listed'
+           and not exists (select 1 from amazon_listings x
+                            where x.sku = o.sku and x.last_pushed_at is not null)`
+      : '';
+
     const { rows } = await db.query(
-      `select a.barcode, a.sku, a.vendor, a.our_title, a.our_price, a.qty, a.source,
+      `select * from (
+       select a.barcode, a.sku, a.vendor, a.our_title, a.our_price, a.qty, a.source,
               a.asin, a.amazon_title, a.state, a.state_reason, a.confidence, a.match_note,
               a.last_pushed_at, a.listing_status, a.buyable, a.status_checked_at,
               -- an open complaint from Amazon, so the screen can say "stuck" rather
@@ -33,7 +62,9 @@ router.get('/listings', async (req, res, next) => {
                 order by e.created_at desc limit 1) as problem
        from amazon_listings a
        ${where.length ? 'where ' + where.join(' and ') : ''}
-       order by a.vendor, a.sku
+       ${ownBrand}
+       ) rows
+       order by vendor, sku
        limit $${params.length - 1} offset $${params.length}`,
       params
     );
