@@ -140,6 +140,11 @@ async function main() {
     // Amazon as offers against someone else's page; writing a new page under the same
     // SKU would fight with them.
     '\n  and a.last_pushed_at is null' +
+    // Filtered here rather than at the far end of the loop: a banned brand or a product
+    // with no photograph cannot be listed whatever else is true of it, and finding that
+    // out after fetching its images from the shop costs half a second each time.
+    "\n  and lower(coalesce(a.vendor,'')) not in ('pandora','von treskow','kirstin ash')" +
+    '\n  and coalesce(p.media_count, 0) > 0' +
     skuFilter + '\norder by a.our_price desc' + (LIMIT ? '\nlimit ' + LIMIT : '');
 
   const { rows } = await db.query(sql, params);
