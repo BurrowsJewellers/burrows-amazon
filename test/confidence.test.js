@@ -52,3 +52,18 @@ test('codeAppears does not fire on coincidental short numbers', () => {
   assert.equal(codeAppears('AB12', 'Something 12 something'), false);
   assert.equal(codeAppears('123', 'Ring 123 Silver'), false);
 });
+
+const { toAmazonSize } = require('../src/stage2/ringsize');
+
+test('European ring sizes convert; US ones are left alone', () => {
+  // Circumference in millimetres — a range US sizes never occupy.
+  assert.equal(toAmazonSize('54').us, '6.75');
+  assert.equal(toAmazonSize('62').us, '10');
+  // Still a US size, not a circumference.
+  assert.equal(toAmazonSize('7.5').us, '7.5');
+  assert.equal(toAmazonSize('N').us, '6.75');
+  // Ambiguous or not a size at all: refused rather than guessed.
+  assert.equal(toAmazonSize('N½, O').us, null);
+  assert.equal(toAmazonSize('Large').us, null);
+  assert.equal(toAmazonSize('').us, null);
+});

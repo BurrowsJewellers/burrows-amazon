@@ -26,9 +26,20 @@ function toAmazonSize(raw) {
   const s = String(raw || '').trim().toUpperCase();
   if (!s) return { us: null, why: 'no ring size recorded' };
 
-  // Already numeric — a US size someone typed in directly.
   if (/^\d+(\.\d+)?$/.test(s)) {
     const n = Number(s);
+
+    // European sizes are the band's inner circumference in millimetres, so they run
+    // from the high thirties to the low seventies — a range US sizes never reach. A
+    // number in it is unambiguously European, and the conversion is arithmetic rather
+    // than a guess: US = (circumference - 36.5) / 2.55, to the nearest quarter.
+    if (n >= 37 && n <= 72) {
+      const us = toQuarter((n - 36.5) / 2.55);
+      if (us < 0 || us > 16) return { us: null, why: `ring size ${s} converts outside Amazon's range` };
+      return { us: String(us), why: '' };
+    }
+
+    // Otherwise a US size someone typed in directly.
     if (n < 0 || n > 16) return { us: null, why: `ring size ${s} is outside the range Amazon accepts` };
     return { us: String(toQuarter(n)), why: '' };
   }
