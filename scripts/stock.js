@@ -33,17 +33,38 @@ async function main() {
   const run = await db.query(`insert into amazon_runs (job) values ('stock') returning id`);
   const runId = run.rows[0].id;
 
-  // The live figure comes from the Shopify mirror, the same place the listing decision
-  // came from, so the two can never disagree about what "in stock" means.
+  // Everything we have put on Amazon, by either route.
+  //
+  // Stage 1 sends an offer against someone else's page and records it in
+  // amazon_listings; Stage 2 authors the page itself and records it in
+  // amazon_own_brand. Watching only the first left everything the second created
+  // completely unguarded — and what Stage 2 lists is mostly one-of-a-kind, which is
+  // precisely the stock that must never be sellable twice.
+  //
+  // The live figure comes from the Shopify mirror either way, the same place the
+  // listing decision came from, so the two can never disagree about what in stock means.
   const { rows } = await db.query(`
-    select a.sku, a.vendor, a.qty as sent_qty, a.state, r.supplier_id,
+    with ours as (
+      select a.sku, a.vendor, a.qty as sent_qty, a.state, 'stage1' as route
+      from amazon_listings a
+      where a.last_pushed_at is not null
+      union all
+      select o.sku, o.vendor, o.qty as sent_qty,
+             -- Stage 2 has no separate listed/ready pair; being listed is the whole of it.
+             case when o.state = 'listed' then 'listed' else o.state end as state,
+             'stage2' as route
+      from amazon_own_brand o
+      where o.state = 'listed'
+        and not exists (select 1 from amazon_listings a
+                         where a.sku = o.sku and a.last_pushed_at is not null)
+    )
+    select ours.sku, ours.vendor, ours.sent_qty, ours.state, ours.route, r.supplier_id,
            coalesce((select sum(l.available)::int from shopify_inventory_levels l
                       where l.inventory_item_id = v.inventory_item_id), 0) as live_qty
-    from amazon_listings a
-    join shopify_product_variants v on v.sku = a.sku
-    left join retail_edge_products r on r.sku = a.sku
-    where a.last_pushed_at is not null
-    order by a.sku
+    from ours
+    join shopify_product_variants v on v.sku = ours.sku
+    left join retail_edge_products r on r.sku = ours.sku
+    order by ours.sku
   `);
 
   // Ask about our own SKUs rather than enumerating the account: the listings search
@@ -119,7 +140,10 @@ async function main() {
 
   const withdrawing = needsChange.filter((r) => r.withdrawn).length;
 
-  console.log(`${DRY ? '[dry run] ' : ''}${rows.length} sent, ${onAmazon.size} found on Amazon`);
+  const byRoute = rows.reduce((a, r) => (a[r.route] = (a[r.route] || 0) + 1, a), {});
+  console.log(`${DRY ? '[dry run] ' : ''}${rows.length} on Amazon by our hand ` +
+    `(${byRoute.stage1 || 0} offers, ${byRoute.stage2 || 0} pages we authored), ` +
+    `${onAmazon.size} found`);
   console.log(`  ${soldOut.length - withdrawing} have sold out and Amazon still shows them available`);
   if (withdrawing) console.log(`  ${withdrawing} we no longer intend to list and are coming off sale`);
   console.log(`  ${restock.length} have a quantity on Amazon that is not what we hold`);
