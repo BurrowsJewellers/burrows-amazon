@@ -90,14 +90,20 @@ async function request(path, { method = 'GET', body } = {}) {
  * debug from the other end.
  */
 async function scopes() {
-  // Not under /admin/api/<version> like everything else, so it does not go through
-  // request().
-  const { shop, token } = await accessToken();
-  const res = await fetch(`https://${shop}/admin/oauth/access_scopes.json`, {
-    headers: { 'X-Shopify-Access-Token': token },
+  // Asked of the installation, not of the token.
+  //
+  // /admin/oauth/access_scopes.json answers for the token presented, and a token minted
+  // from client credentials can still carry the scopes as they were before the merchant
+  // approved an update — it reported eight scopes for a full day after write_orders had
+  // genuinely been granted. Believing it would mean refusing to write while holding
+  // permission to, which is a maddening thing to debug.
+  const res = await request('/graphql.json', {
+    method: 'POST',
+    body: { query: '{ currentAppInstallation { accessScopes { handle } } }' },
   });
-  if (!res.ok) throw new Error(`could not read the app's scopes (${res.status})`);
-  return ((await res.json()).access_scopes || []).map((s) => s.handle);
+  const granted = res?.data?.currentAppInstallation?.accessScopes;
+  if (!granted) throw new Error("could not read the app's granted scopes");
+  return granted.map((s) => s.handle);
 }
 
 module.exports = { request, scopes, accessToken, API_VERSION };
