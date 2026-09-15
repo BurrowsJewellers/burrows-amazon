@@ -121,7 +121,9 @@ async function main() {
     return;
   }
 
-  const params = [...OWN_BRANDS];
+  // Only bind the brand names when they are actually used — an unreferenced parameter
+  // leaves Postgres unable to infer its type.
+  const params = OWN_ONLY ? [...OWN_BRANDS] : [];
   const brandFilter = OWN_ONLY
     ? OWN_BRANDS.map((_, i) => 'lower(a.vendor) = $' + (i + 1)).join(' or ')
     : 'true';
@@ -137,7 +139,7 @@ async function main() {
 
   const { rows } = await db.query(sql, params);
 
-  console.log(rows.length + ' of our own pieces to consider' +
+  console.log(rows.length + (OWN_ONLY ? ' of our own pieces' : ' products') + ' to consider' +
     (SUBMIT ? '' : '  (validating only — nothing will be created)') + '\n');
 
   const counts = {};
@@ -206,11 +208,19 @@ async function main() {
 
       const errs = (res.issues || []).filter((i) => i.severity === 'ERROR');
       issues = errs.map((i) => ({ code: i.code, message: i.message }));
-      if (errs.length) {
-        state = 'blocked';
-        reason = errs.map((i) => i.message).join(' | ').slice(0, 400);
-      } else {
+      const text = errs.map((i) => i.message).join(' ');
+
+      if (!errs.length) {
         state = SUBMIT ? 'listed' : 'ready';
+      } else if (/different from what's already in the Amazon catalogue|already exists in the Amazon catalog/i.test(text)) {
+        // Amazon already carries this barcode. That makes it a Stage 1 offer, not a
+        // page for us to author — and it means our own barcode lookup missed it, which
+        // is worth knowing on its own.
+        state = 'stage1';
+        reason = 'Amazon already carries this barcode — our catalogue match missed it, so it belongs in Stage 1';
+      } else {
+        state = 'blocked';
+        reason = text.slice(0, 400);
       }
     }
 

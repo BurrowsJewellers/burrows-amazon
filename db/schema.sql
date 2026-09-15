@@ -122,6 +122,7 @@ create table if not exists amazon_own_brand (
   --   not_ready  something Amazon insists on is missing from our own data
   --   ready      Amazon validated it; waiting only on brand approval
   --   blocked    Amazon refused it for a reason we cannot fix from here
+  --   stage1     Amazon already carries the barcode; it is an offer, not a new page
   --   listed     created on Amazon
   state_reason   text,
   issues         jsonb,
