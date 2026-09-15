@@ -148,7 +148,7 @@ const TABS = [
   {key:'conflicts', label:'Barcode conflicts'},
   {key:'no_match',  label:'Not on Amazon'},
   {key:'blocked',   label:'Blocked by a rule'},
-  {key:'ownbrand',  label:'Our own brand'},
+  {key:'ownbrand',  label:'Pages we created'},
 ];
 
 async function load() {
@@ -365,16 +365,17 @@ async function renderOwnBrand() {
 
   $('panel').innerHTML =
     `<div class="banner info" style="margin:0 0 14px">
-      <b>These are pieces we make ourselves.</b> Amazon has never carried them, because nobody ever
-      issued them a barcode — so instead of matching an existing listing, we have to create the page.
-      That is only allowed for a brand we own, which is why this covers Burrows Collection and nothing else.
-      Amazon has checked the ones below without creating anything.
+      <b>Amazon has no listing for these under our barcode</b> — for our own pieces because nobody ever
+      issued them one, for the rest because Amazon simply does not carry them. So rather than offering
+      against an existing page, we write the page ourselves. Amazon accepts that for every brand we
+      stock bar a few, which was not what we expected when this started.
      </div>` +
     '<div class="tiles" style="margin-bottom:16px">' +
-    [['good', readyN, 'our data is good enough', money0(readyVal)],
+    [['good', readyN, 'ready, not yet created', money0(readyVal)],
      ['warn', by.not_ready?.n || 0, 'missing something of ours', money0(by.not_ready?.value)],
      ['bad',  by.blocked?.n || 0, 'Amazon will not accept yet', money0(by.blocked?.value)],
-     ['',     by.listed?.n || 0, 'created on Amazon', money0(by.listed?.value)],
+     ['good', by.listed?.n || 0, 'pages created', money0(by.listed?.value)],
+     ['',     by.stage1?.n || 0, 'Amazon already had it', money0(by.stage1?.value)],
     ].map(([cls, n, label, val]) =>
       `<div class="card tile ${cls}"><div class="n">${(n||0).toLocaleString()}</div>` +
       `<div class="l">${label}</div><div class="l" style="opacity:.75">${val}</div></div>`).join('') +
@@ -388,7 +389,7 @@ async function renderOwnBrand() {
       <td class="num">${money0(b.value)}</td>
       <td class="muted"><code>${esc(b.sample_sku||'')}</code> ${esc((b.sample_title||'').slice(0,34))}</td>
     </tr>`).join('') + '</tbody></table></div>' +
-    (ready.length ? `<h3 style="margin:22px 0 8px;font-size:1rem">Ready the moment the brand is approved</h3>
+    (ready.length ? `<h3 style="margin:22px 0 8px;font-size:1rem">Validated, waiting to be created</h3>
       <div class="tablewrap"><table><thead><tr>
       <th>SKU</th><th>Product</th><th>Category</th><th>Metal</th><th>Stone</th><th>Size</th>
       <th class="num">Price</th><th class="num">Photos</th></tr></thead><tbody>` +
