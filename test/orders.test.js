@@ -59,3 +59,15 @@ test('several lines all reach the order', () => {
   assert.equal(order.line_items.length, 2);
   assert.equal(order.line_items[1].quantity, 2);
 });
+
+test("Amazon's payment is recorded, so Shopify shows nothing owing and offers no invoice", () => {
+  const { order } = shopifyOrderFor(amazonOrder(), [line]);
+  assert.deepEqual(order.transactions, [{ kind: 'sale', status: 'success', amount: '40.00', gateway: 'Amazon' }]);
+});
+
+test("anything Amazon charged beyond the items goes on as postage, so the totals match", () => {
+  const { order } = shopifyOrderFor(amazonOrder(), [line]);          // $40 total, one $35 item
+  assert.deepEqual(order.shipping_lines, [{ title: 'Amazon postage', price: '5.00', code: 'Amazon' }]);
+  const exact = shopifyOrderFor(amazonOrder({ OrderTotal: { CurrencyCode: 'AUD', Amount: '35.00' } }), [line]).order;
+  assert.deepEqual(exact.shipping_lines, []);
+});

@@ -16,6 +16,18 @@
  * order to exist and the stock to move, but not enough to put on a parcel. Rather than
  * invent the missing lines, the order says plainly where the real address lives.
  */
+/** What the buyer paid Amazon: Amazon's own order total, or the lines if it gave none. */
+function totalOf(order, lines) {
+  const t = Number(order.OrderTotal?.Amount || 0);
+  return t > 0 ? t : lines.reduce((n, l) => n + Number(l.unit_price) * Number(l.quantity), 0);
+}
+
+/** The part of Amazon's total that is not the items. */
+function postageOf(order, lines) {
+  const items = lines.reduce((n, l) => n + Number(l.unit_price) * Number(l.quantity), 0);
+  return Math.max(0, Math.round((totalOf(order, lines) - items) * 100) / 100);
+}
+
 function shopifyOrderFor(order, lines) {
   const address = order.ShippingAddress || {};
   const full = Boolean(address.AddressLine1);
@@ -28,6 +40,13 @@ function shopifyOrderFor(order, lines) {
         price: l.unit_price,
       })),
       financial_status: 'paid',           // Amazon has already taken the money
+      // …and the payment itself, recorded against Amazon. Without it Shopify shows the
+      // order as paid with $0 received and the whole total outstanding, and offers to
+      // invoice the buyer or take a card — charging them a second time. (#2920, 26 Oct)
+      transactions: [{ kind: 'sale', status: 'success', amount: totalOf(order, lines).toFixed(2), gateway: 'Amazon' }],
+      // Anything Amazon charged beyond the items is postage; carried so the totals match.
+      shipping_lines: postageOf(order, lines) > 0.005
+        ? [{ title: 'Amazon postage', price: postageOf(order, lines).toFixed(2), code: 'Amazon' }] : [],
       currency: order.OrderTotal?.CurrencyCode || 'AUD',
       // Stock must come down, which is the whole reason this order exists here.
       inventory_behaviour: 'decrement_obeying_policy',

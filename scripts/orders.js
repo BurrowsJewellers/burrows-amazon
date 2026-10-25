@@ -65,6 +65,28 @@ async function amazonOrderItems(orderId) {
   return (res.payload || res).OrderItems || [];
 }
 
+/**
+ * Read a created order back from Shopify and make sure it owes nothing.
+ *
+ * #2920 arrived marked paid with no payment behind it, so Shopify offered to invoice
+ * the buyer or take a card. The order builder now records Amazon's payment; this is
+ * the check that it landed. Anything outstanding gets Amazon's payment recorded on
+ * the spot.
+ */
+async function settle(shopifyOrderId, amazonOrderId) {
+  const get = async () => (await shopify.request(`/orders/${shopifyOrderId}.json?fields=name,total_outstanding,currency`)).order;
+  const o = await get();
+  const owing = Number(o.total_outstanding || 0);
+  if (owing <= 0.005) return false;
+  await shopify.request(`/orders/${shopifyOrderId}/transactions.json`, {
+    method: 'POST',
+    body: { transaction: { kind: 'sale', status: 'success', amount: owing.toFixed(2), currency: o.currency || 'AUD', gateway: 'Amazon', source: 'external' } },
+  });
+  const after = await get();
+  console.log(`  !! ${o.name} (${amazonOrderId}) had $${owing.toFixed(2)} outstanding — Amazon's payment recorded; now $${Number(after.total_outstanding).toFixed(2)}`);
+  return true;
+}
+
 async function main() {
   const run = await db.query("insert into amazon_runs (job) values ('orders') returning id");
   const runId = run.rows[0].id;
@@ -95,7 +117,7 @@ async function main() {
     (SUBMIT && canWrite ? '' : '  (nothing will be written to Shopify)') + '\n');
 
   const counts = {};
-  const bump = (k) => (counts[k] = (counts[k] || 0) + 1);
+  const bump = (k, n = 1) => (counts[k] = (counts[k] || 0) + n);
 
   for (const order of orders) {
     const id = order.AmazonOrderId;
@@ -192,6 +214,7 @@ async function main() {
         [id, created.order.id, created.order.name]);
       console.log(`${id}  -> Shopify ${created.order.name}`);
       bump('carried across');
+      if (await settle(created.order.id, id)) bump('payment had to be recorded after creation');
     } catch (err) {
       // Shopify refusing to reserve stock means our own figure says there is none. For a
       // live order that should not happen — the piece was in stock when it sold — so it
@@ -206,6 +229,18 @@ async function main() {
       console.log(`${id}  held: ${why.slice(0, 150)}`);
       bump(noStock ? 'no stock to reserve' : 'failed');
     }
+  }
+
+  // Every Amazon order carried across in the last 30 days is checked again each run, so
+  // one left owing — by a bug here or a hand edit in Shopify — is caught and settled.
+  if (SUBMIT && canWrite) {
+    const recent = (await db.query(`select amazon_order_id, shopify_order_id from amazon_orders
+      where state = 'created' and shopify_order_id is not null and created_at > now() - interval '30 days'`)).rows;
+    for (const r of recent) {
+      try { if (await settle(r.shopify_order_id, r.amazon_order_id)) bump('older order found owing — payment recorded'); }
+      catch (err) { bump('payment check failed'); console.log(`  could not check ${r.amazon_order_id}: ${String(err.message).slice(0, 100)}`); }
+    }
+    bump('orders checked for anything owing', recent.length);
   }
 
   console.log('');
